@@ -2,7 +2,7 @@
 // @name         MWI · Hugunn
 // @name:zh-CN   MWI · Hugunn
 // @namespace    https://milkywayidle.com/mwi-hugunn
-// @version      1.1.0
+// @version      1.2.0
 // @description  Tired of reinstalling a pile of laggy, mismatched scripts on every device? Fast! Lightweight! One script is all you need—come fight me if it's not! 15-in-1 MWI suite, zero deps & 100% read-only.
 // @description:zh-CN 受够了换设备就重装一堆卡顿又杂乱的脚本？快速！轻量！一个就够！不好用你来打我！15合1 MWI 聚合插件（市场/规划/迷宫/战斗），零依赖纯只读。
 // @author       adudu
@@ -1790,6 +1790,9 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="${size}" height="${size}" shape-rendering="crispEdges" aria-hidden="true" style="display:inline-block;flex:0 0 auto;image-rendering:pixelated">${HUGUNN_ICON_PATHS}</svg>`;
   }
 
+  // src/core/version.ts
+  var HUGUNN_VERSION = true ? "1.2.0" : "dev";
+
   // src/core/settings-ui.ts
   var SETTINGS_BTN_ID = "mwi-lite-settings-btn";
   var SETTINGS_MODAL_ID = "mwi-lite-settings-modal";
@@ -1990,7 +1993,7 @@
       <div class="mwi-lite-card">
         <div class="mwi-lite-header">
           <div>
-            <div class="mwi-lite-title">${getHugunnIconSvg(18)}<span>MWI · Hugunn v1.1.0</span></div>
+            <div class="mwi-lite-title">${getHugunnIconSvg(18)}<span>MWI · Hugunn v${HUGUNN_VERSION}</span></div>
             <div class="mwi-lite-status">
               ${i18n.t(`已启用 ${enabledCount}/${items.length} 模块`, `${enabledCount}/${items.length} modules enabled`)}
               · ${i18n.t("当前路由", "Route")}: <b>${domScheduler.getActiveRoute()}</b>
@@ -11233,12 +11236,12 @@ table[class*="LabyrinthPanel_automationTable"] tbody td:nth-child(3) {
         titleText.textContent = nameText;
         const timeText = document.createElement("span");
         timeText.className = `${CONTROL_LOG_ITEM_CLASS}__time`;
-        const durationText = formatRoomLogDurationSeconds(session);
+        const durationText2 = formatRoomLogDurationSeconds(session);
         if (session?.mode === "combat") {
-          timeText.textContent = durationText;
+          timeText.textContent = durationText2;
         } else {
           const expText = t("roomLogExpFmt", { value: formatRoomLogExperience(session?.totalExperience) });
-          timeText.textContent = `${durationText} | ${expText}`;
+          timeText.textContent = `${durationText2} | ${expText}`;
         }
         header.appendChild(titleText);
         header.appendChild(timeText);
@@ -20926,23 +20929,169 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     createGuildShopRankModule()
   ];
 
+  // src/features/planner/material-limit.ts
+  var COIN_HRID = "/items/coin";
+  var UNLIMITED = Object.freeze({ isInfinite: true, max: Infinity, bottleneckHrid: "" });
+  function parseItemHash(hash) {
+    if (typeof hash !== "string" || !hash) return null;
+    const parts = hash.split("::");
+    const itemHrid = parts.find((p) => p.startsWith("/items/"));
+    if (!itemHrid) return null;
+    const enh = Number(parts[parts.length - 1]);
+    return { itemHrid, enhancementLevel: Number.isFinite(enh) && enh >= 0 ? Math.floor(enh) : 0 };
+  }
+  function computeDrinkConcentrationScale(clientData, characterItems, loadout) {
+    const itemDetailMap = clientData?.itemDetailMap || {};
+    const multTable = clientData?.enhancementLevelTotalBonusMultiplierTable || [];
+    const statOf = (itemHrid, enhancementLevel) => {
+      const eq = itemDetailMap[itemHrid]?.equipmentDetail;
+      if (!eq) return 0;
+      const base = eq.noncombatStats?.drinkConcentration || 0;
+      const enh = (eq.noncombatEnhancementBonuses?.drinkConcentration || 0) * (multTable[enhancementLevel] || 0);
+      return base + enh;
+    };
+    let conc = 0;
+    if (loadout?.wearableMap && typeof loadout.wearableMap === "object") {
+      for (const raw of Object.values(loadout.wearableMap)) {
+        const parsed = parseItemHash(raw);
+        if (parsed) conc += statOf(parsed.itemHrid, parsed.enhancementLevel);
+      }
+      return 1 + Math.max(0, conc);
+    }
+    for (const item of characterItems) {
+      if (!item?.itemHrid || !item.itemLocationHrid || item.itemLocationHrid === "/item_locations/inventory") {
+        continue;
+      }
+      conc += statOf(item.itemHrid, item.enhancementLevel || 0);
+    }
+    return 1 + Math.max(0, conc);
+  }
+  function resolveActionDrinks(actionType, loadout, drinkSlotsMap) {
+    if (loadout && Array.isArray(loadout.drinkItemHrids)) {
+      return loadout.drinkItemHrids.filter((h) => typeof h === "string" && h.length > 0);
+    }
+    return (drinkSlotsMap.get(actionType) || []).map((d) => d?.itemHrid).filter(Boolean);
+  }
+  function computeArtisanSaving(drinkHrids, clientData, characterItems, loadout) {
+    const itemDetailMap = clientData?.itemDetailMap || {};
+    let artisan = 0;
+    for (const hrid of drinkHrids) {
+      const buffs = itemDetailMap[hrid]?.consumableDetail?.buffs;
+      if (!Array.isArray(buffs)) continue;
+      for (const b of buffs) {
+        if (b?.typeHrid === "/buff_types/artisan") {
+          artisan += (Number(b.flatBoost) || 0) + (Number(b.ratioBoost) || 0);
+        }
+      }
+    }
+    if (artisan <= 0) return 0;
+    const scale = computeDrinkConcentrationScale(clientData, characterItems, loadout);
+    return Math.min(0.99, artisan * scale);
+  }
+  function buildInventory(characterItems) {
+    const byKey = /* @__PURE__ */ new Map();
+    const byHash = /* @__PURE__ */ new Map();
+    for (const item of characterItems) {
+      if (!item?.itemHrid || !item.count || item.count <= 0) continue;
+      if (item.itemLocationHrid && item.itemLocationHrid !== "/item_locations/inventory") continue;
+      const enhancementLevel = item.enhancementLevel || 0;
+      const k = `${item.itemHrid}::${enhancementLevel}`;
+      byKey.set(k, (byKey.get(k) || 0) + item.count);
+      if (typeof item.hash === "string" && item.hash) {
+        byHash.set(item.hash, { itemHrid: item.itemHrid, enhancementLevel, count: item.count, hash: item.hash });
+      }
+    }
+    return { byKey, byHash };
+  }
+  function resolveStack(inv, hash) {
+    if (typeof hash !== "string" || !hash) return null;
+    const direct = inv.byHash.get(hash);
+    if (direct) return direct;
+    const parsed = parseItemHash(hash);
+    if (!parsed) return null;
+    const count = inv.byKey.get(`${parsed.itemHrid}::${parsed.enhancementLevel}`) || 0;
+    return count > 0 ? { ...parsed, count, hash } : null;
+  }
+  function getAlchemyCoinCost(actionHrid, itemLevel, sellPrice) {
+    if (actionHrid === "/actions/alchemy/decompose" || actionHrid === "/actions/alchemy/unrefine") {
+      return Math.floor(5 * (10 + (itemLevel || 0)));
+    }
+    if (actionHrid === "/actions/alchemy/transmute") {
+      const fifth = (sellPrice || 0) / 5;
+      return fifth > 50 ? Math.floor(fifth) : 50;
+    }
+    return 0;
+  }
+  function computeMaterialLimit(input) {
+    const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, actionInstance } = input;
+    if (!actionDetail) return UNLIMITED;
+    const itemDetailMap = clientData?.itemDetailMap || {};
+    const actionFunc = actionDetail.function || "";
+    const isAlchemy = actionFunc === "/action_functions/alchemy";
+    const isEnhancing = actionFunc === "/action_functions/enhancing";
+    if ((isAlchemy || isEnhancing) && !actionInstance) return UNLIMITED;
+    const inv = buildInventory(characterItems);
+    let limit = Infinity;
+    let bottleneckHrid = "";
+    const cap = (value, hrid) => {
+      if (value < limit) {
+        limit = value;
+        bottleneckHrid = hrid;
+      }
+    };
+    const upgradeHrid = typeof actionDetail.upgradeItemHrid === "string" ? actionDetail.upgradeItemHrid : "";
+    if (upgradeHrid) {
+      const selected = resolveStack(inv, actionInstance?.primaryItemHash);
+      const count = actionInstance?.primaryItemHash ? selected?.count || 0 : inv.byKey.get(`${upgradeHrid}::0`) || 0;
+      cap(count, upgradeHrid);
+    }
+    const costs = [];
+    if (actionFunc === "/action_functions/production") {
+      for (const inp of Array.isArray(actionDetail.inputItems) ? actionDetail.inputItems : []) {
+        if (inp?.itemHrid) costs.push({ itemHrid: inp.itemHrid, enhancementLevel: 0, count: Number(inp.count) || 0 });
+      }
+    } else if (isAlchemy) {
+      const item = resolveStack(inv, actionInstance.primaryItemHash);
+      if (!item) return { isInfinite: false, max: 0, bottleneckHrid: parseItemHash(actionInstance.primaryItemHash)?.itemHrid || "" };
+      const detail = itemDetailMap[item.itemHrid] || {};
+      const bulk = Number(detail.alchemyDetail?.bulkMultiplier) || 1;
+      cap(Math.floor(item.count / bulk) || 0, item.itemHrid);
+      const catalyst = resolveStack(inv, actionInstance.secondaryItemHash);
+      if (catalyst) {
+        if (catalyst.hash === item.hash) cap(Math.floor(item.count / (bulk + 1)), item.itemHrid);
+        else cap(catalyst.count || 0, catalyst.itemHrid);
+      }
+      costs.push({ itemHrid: item.itemHrid, enhancementLevel: item.enhancementLevel, count: bulk });
+      const coin = getAlchemyCoinCost(actionDetail.hrid || "", Number(detail.itemLevel) || 0, Number(detail.sellPrice) || 0);
+      if (coin) costs.push({ itemHrid: COIN_HRID, enhancementLevel: 0, count: coin * bulk });
+    } else if (isEnhancing) {
+      if ((Number(actionInstance.enhancingMaxLevel) || 0) > 0) return UNLIMITED;
+      const item = resolveStack(inv, actionInstance.primaryItemHash);
+      if (!item) return { isInfinite: false, max: 0, bottleneckHrid: parseItemHash(actionInstance.primaryItemHash)?.itemHrid || "" };
+      for (const c of itemDetailMap[item.itemHrid]?.enhancementCosts || []) {
+        if (c?.itemHrid) costs.push({ itemHrid: c.itemHrid, enhancementLevel: c.enhancementLevel || 0, count: Number(c.count) || 0 });
+      }
+    }
+    if (costs.length > 0) {
+      const drinks = resolveActionDrinks(actionDetail.type || "", loadout, drinkSlotsMap);
+      const artisan = isAlchemy || isEnhancing ? 0 : computeArtisanSaving(drinks, clientData, characterItems, loadout);
+      for (const c of costs) {
+        const need = (1 - artisan) * c.count;
+        if (!(need > 0)) continue;
+        const have = inv.byKey.get(`${c.itemHrid}::${c.enhancementLevel}`) || 0;
+        cap(Math.floor(have / need), c.itemHrid);
+      }
+    }
+    if (!Number.isFinite(limit)) return UNLIMITED;
+    return { isInfinite: false, max: Math.max(0, limit), bottleneckHrid };
+  }
+
   // src/features/planner/action-time-math.ts
   var EFFICIENCY_FUNCTIONS = /* @__PURE__ */ new Set([
     "/action_functions/gathering",
     "/action_functions/production",
     "/action_functions/alchemy"
   ]);
-  function parseLoadoutWearable(raw) {
-    if (typeof raw !== "string" || !raw) return null;
-    const parts = raw.split("::");
-    const hrid = parts.find((p) => p.startsWith("/items/"));
-    if (!hrid) return null;
-    const enh = Number(parts[parts.length - 1]);
-    return {
-      itemHrid: hrid,
-      enhancementLevel: Number.isFinite(enh) && enh >= 0 ? enh : 0
-    };
-  }
   function getItemLevelFromHash(itemHash, characterItems, itemDetailMap) {
     if (typeof itemHash !== "string" || !itemHash) return null;
     for (let i = 0; i < characterItems.length; i++) {
@@ -21008,7 +21157,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const wearables = loadout?.wearableMap;
     if (wearables && typeof wearables === "object") {
       for (const raw of Object.values(wearables)) {
-        const parsed = parseLoadoutWearable(raw);
+        const parsed = parseItemHash(raw);
         if (!parsed) continue;
         const eq = itemDetailMap[parsed.itemHrid]?.equipmentDetail;
         if (!eq) continue;
@@ -21027,8 +21176,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         drinkConcentration += addStat("drinkConcentration");
       }
     }
-    const loadoutDrinks = Array.isArray(loadout?.drinkItemHrids) ? loadout.drinkItemHrids.filter((h) => typeof h === "string" && h.length > 0) : [];
-    const slotDrinks = loadoutDrinks.length > 0 ? loadoutDrinks : (drinkSlotsMap.get(actionType) || []).map((d) => d?.itemHrid).filter(Boolean);
+    const slotDrinks = resolveActionDrinks(actionType, loadout, drinkSlotsMap);
     const teaScale = 1 + Math.max(0, drinkConcentration);
     for (const hrid of slotDrinks) {
       const buffs = itemDetailMap[hrid]?.consumableDetail?.buffs;
@@ -21063,7 +21211,8 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       characterQuests,
       characterLoadouts,
       drinkSlotsMap,
-      nowMs = Date.now()
+      nowMs = Date.now(),
+      materialLimit = null
     } = input;
     const detail = clientData?.actionDetailMap?.[action?.actionHrid];
     if (!detail) {
@@ -21075,7 +21224,8 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         efficiency: 0,
         remainingActions: 0,
         totalSec: 0,
-        isInfinite: false
+        isInfinite: false,
+        materialLimited: false
       };
     }
     const baseSec = (detail.baseTimeCost || 0) / 1e9 > 0 ? (detail.baseTimeCost || 0) / 1e9 : 3;
@@ -21155,7 +21305,9 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const effectiveRate = 1 + efficiency;
     const effectiveSecPerCount = perAttemptSec / effectiveRate;
     const hasMax = Boolean(action?.hasMaxCount && (action?.maxCount || 0) > 0);
-    const remainingActions = hasMax ? Math.max(0, action.maxCount - (action.currentCount || 0)) : 0;
+    const matLimit = !hasMax && typeof materialLimit === "number" && Number.isFinite(materialLimit) ? Math.max(0, Math.floor(materialLimit)) : null;
+    const bounded = hasMax || matLimit !== null;
+    const remainingActions = hasMax ? Math.max(0, action.maxCount - (action.currentCount || 0)) : matLimit ?? 0;
     let elapsedFraction = 0;
     if (actionIndex === 0 && action?.startTime) {
       const startMs = new Date(action.startTime).getTime();
@@ -21164,7 +21316,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         elapsedFraction = Math.min(perAttemptSec * 0.99, elapsedSec % perAttemptSec);
       }
     }
-    const totalSec = hasMax ? Math.max(0, remainingActions * effectiveSecPerCount - elapsedFraction) : 0;
+    const totalSec = bounded ? Math.max(0, remainingActions * effectiveSecPerCount - elapsedFraction) : 0;
     return {
       perAttemptSec,
       effectiveSecPerCount,
@@ -21173,7 +21325,8 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       efficiency,
       remainingActions,
       totalSec,
-      isInfinite: !hasMax
+      isInfinite: !bounded,
+      materialLimited: matLimit !== null
     };
   }
 
@@ -21203,7 +21356,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     }
     return `${hh}:${mm}`;
   }
-  function formatTimingTooltip(ctx, est) {
+  function formatTimingTooltip(ctx, est, limit) {
     const parts = [
       `${ctx.i18n.t("单次", "Attempt")}: ${est.perAttemptSec.toFixed(2)}s`,
       `${ctx.i18n.t("加速", "Speed")}: +${(est.actionSpeed * 100).toFixed(1)}%`
@@ -21215,7 +21368,20 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       parts.push(`${ctx.i18n.t("效率", "Efficiency")}: +${(est.efficiency * 100).toFixed(1)}%`);
       parts.push(`${ctx.i18n.t("等效", "Eff")}: ${est.effectiveSecPerCount.toFixed(2)}s/${ctx.i18n.t("次", "act")}`);
     }
+    if (est.materialLimited && limit && !limit.isInfinite) {
+      const name = limit.bottleneckHrid ? ctx.i18n.getItemName(limit.bottleneckHrid) : "";
+      parts.push(
+        `${ctx.i18n.t("材料可做", "Materials allow")}: ${est.remainingActions.toLocaleString()} ${ctx.i18n.t("次", "acts")}` + (name ? ` (${ctx.i18n.t("瓶颈", "bottleneck")}: ${name})` : "")
+      );
+    }
     return parts.join(" · ");
+  }
+  function durationText(est, sec) {
+    return `${est.materialLimited ? "~" : ""}${formatDuration(sec)}`;
+  }
+  var materialLimitCache = /* @__PURE__ */ new Map();
+  function clearMaterialLimitCache() {
+    materialLimitCache.clear();
   }
   function buildActionEstimator(ctx, actions) {
     const clientData = ctx.gameData.getClientData();
@@ -21227,19 +21393,45 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const drinkSlotsMap = ctx.gameData.getActionTypeDrinkSlots();
     const currentActionLoadoutId = actions[0]?.characterLoadoutID ?? null;
     const nowMs = Date.now();
-    return (action, index) => estimateActionTiming({
-      action,
-      actionIndex: index,
-      currentActionLoadoutId,
-      clientData,
-      buffSources,
-      characterSkills,
-      characterItems,
-      characterQuests,
-      characterLoadouts,
-      drinkSlotsMap,
-      nowMs
-    });
+    const limitFor = (action, index) => {
+      if (action?.hasMaxCount && (action?.maxCount || 0) > 0) return null;
+      const detail = clientData?.actionDetailMap?.[action?.actionHrid];
+      if (!detail) return null;
+      const loadoutId = action?.characterLoadoutID;
+      const loadout = index > 0 && typeof loadoutId === "number" && loadoutId > 0 && loadoutId !== currentActionLoadoutId && characterLoadouts?.[loadoutId] ? characterLoadouts[loadoutId] : null;
+      const key = `${action.actionHrid}|${loadout ? loadoutId : 0}|${action.primaryItemHash || ""}|${action.secondaryItemHash || ""}|${action.enhancingMaxLevel || 0}`;
+      let res = materialLimitCache.get(key);
+      if (!res) {
+        res = computeMaterialLimit({
+          actionDetail: detail,
+          clientData,
+          characterItems,
+          drinkSlotsMap,
+          loadout,
+          actionInstance: action
+        });
+        materialLimitCache.set(key, res);
+      }
+      return res;
+    };
+    const estimate = (action, index) => {
+      const limit = limitFor(action, index);
+      return estimateActionTiming({
+        action,
+        actionIndex: index,
+        materialLimit: limit && !limit.isInfinite ? limit.max : null,
+        currentActionLoadoutId,
+        clientData,
+        buffSources,
+        characterSkills,
+        characterItems,
+        characterQuests,
+        characterLoadouts,
+        drinkSlotsMap,
+        nowMs
+      });
+    };
+    return { estimate, limitFor };
   }
   function createActionTimerModule() {
     let ctx = null;
@@ -21265,7 +21457,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         timerEl.setAttribute("data-mwi-lite", "1");
         actionNameEl.parentElement.insertBefore(timerEl, actionNameEl.nextSibling);
       }
-      const estimateAt = buildActionEstimator(ctx, actions);
+      const { estimate: estimateAt, limitFor } = buildActionEstimator(ctx, actions);
       const curEst = estimateAt(current, 0);
       if (curEst.perAttemptSec <= 0) {
         timerEl.textContent = "";
@@ -21274,18 +21466,22 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       }
       let queueTotal = curEst.totalSec;
       let queueInf = curEst.isInfinite;
+      let queueMat = curEst.materialLimited;
       for (let i = 1; i < actions.length; i++) {
         const est = estimateAt(actions[i], i);
         if (est.isInfinite) queueInf = true;
+        if (est.materialLimited) queueMat = true;
         queueTotal += est.totalSec;
       }
-      const curPart = curEst.isInfinite ? `∞ (${curEst.perAttemptSec.toFixed(2)}s)` : `${formatDuration(curEst.totalSec)} → ${formatFinishClock(curEst.totalSec)}`;
-      const queuePart = actions.length > 1 ? queueInf ? ` | ${ctx.i18n.t("队列", "Q")}: ∞` : ` | ${ctx.i18n.t("总计", "Total")}: ${formatDuration(queueTotal)} (${formatFinishClock(queueTotal)})` : "";
+      const curClock = formatFinishClock(curEst.totalSec);
+      const curPart = curEst.isInfinite ? `∞ (${curEst.perAttemptSec.toFixed(2)}s)` : `${durationText(curEst, curEst.totalSec)}${curClock ? ` → ${curClock}` : ""}`;
+      const totalClock = formatFinishClock(queueTotal);
+      const queuePart = actions.length > 1 ? queueInf ? ` | ${ctx.i18n.t("队列", "Q")}: ∞` : ` | ${ctx.i18n.t("总计", "Total")}: ${queueMat ? "~" : ""}${formatDuration(queueTotal)}${totalClock ? ` (${totalClock})` : ""}` : "";
       const nextText = `⏱ ${curPart}${queuePart}`;
       if (timerEl.textContent !== nextText) {
         timerEl.textContent = nextText;
       }
-      const nextTitle = formatTimingTooltip(ctx, curEst);
+      const nextTitle = formatTimingTooltip(ctx, curEst, limitFor(current, 0));
       if (timerEl.title !== nextTitle) {
         timerEl.title = nextTitle;
       }
@@ -21303,7 +21499,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       });
       const menu = document.querySelector('[class*="QueuedActions_queuedActionsEditMenu"]');
       if (menu) {
-        const estimateAt = buildActionEstimator(context, actions);
+        const { estimate: estimateAt, limitFor } = buildActionEstimator(context, actions);
         const firstEst = estimateAt(actions[0], 0);
         let accSec = firstEst.totalSec;
         let hasInf = firstEst.isInfinite;
@@ -21324,12 +21520,22 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
             tag.setAttribute("data-mwi-lite", "1");
             row.appendChild(tag);
           }
-          const txt = est.isInfinite ? `∞ (${est.perAttemptSec.toFixed(2)}s)` : `${formatDuration(est.totalSec)}${hasInf ? "" : ` (${formatFinishClock(idx === 0 ? firstEst.totalSec : accSec)})`}`;
+          const rowClock = hasInf ? "" : formatFinishClock(idx === 0 ? firstEst.totalSec : accSec);
+          const txt = est.isInfinite ? `∞ (${est.perAttemptSec.toFixed(2)}s)` : `${durationText(est, est.totalSec)}${rowClock ? ` (${rowClock})` : ""}`;
           if (tag.textContent !== txt) tag.textContent = txt;
-          const tip = formatTimingTooltip(context, est);
+          const tip = formatTimingTooltip(context, est, limitFor(actions[idx], idx));
           if (tag.title !== tip) tag.title = tip;
         });
       }
+    };
+    const onMaterialsChanged = () => {
+      clearMaterialLimitCache();
+      syncTimers();
+    };
+    const onActionCompleted = () => {
+      clearMaterialLimitCache();
+      updateHeaderBar();
+      updateQueuePopups();
     };
     const syncTimers = () => {
       if (document.hidden) {
@@ -21393,13 +21599,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         `
         );
         unsubs = [
-          ctx.gameData.on("character_initialized", syncTimers),
-          ctx.gameData.on("actions_updated", syncTimers),
-          ctx.gameData.on("action_completed", updateHeaderBar),
-          ctx.gameData.on("buffs_updated", syncTimers),
+          ctx.gameData.on("character_initialized", onMaterialsChanged),
+          ctx.gameData.on("actions_updated", onMaterialsChanged),
+          ctx.gameData.on("action_completed", onActionCompleted),
+          ctx.gameData.on("items_updated", onMaterialsChanged),
+          ctx.gameData.on("buffs_updated", onMaterialsChanged),
           ctx.gameData.on("skills_updated", syncTimers),
           ctx.gameData.on("house_rooms_updated", syncTimers),
-          ctx.gameData.on("consumables_updated", syncTimers),
+          ctx.gameData.on("consumables_updated", onMaterialsChanged),
           ctx.gameData.on("personal_buffs_updated", syncTimers),
           ctx.gameData.on("quests_updated", syncTimers)
         ];
@@ -21415,6 +21622,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
             clearInterval(intervalId);
             intervalId = null;
           }
+          clearMaterialLimitCache();
           document.getElementById(HEADER_TIMER_ID)?.remove();
           document.querySelectorAll(`.${QUEUE_TAG_CLASS}`).forEach((el) => el.remove());
         };
@@ -22749,91 +22957,18 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     }
     return { loadoutId: null, loadout: null };
   }
-  function parseLoadoutItemSpec(raw) {
-    if (typeof raw !== "string" || !raw) return null;
-    const parts = raw.split("::");
-    const hrid = parts.find((p) => p.startsWith("/items/"));
-    if (!hrid) return null;
-    const enh = Number(parts[parts.length - 1]);
-    return { itemHrid: hrid, enhancementLevel: Number.isFinite(enh) && enh >= 0 ? enh : 0 };
-  }
-  function computeDrinkConcentration(clientData, characterItems, selectedLoadout) {
-    const itemDetailMap = clientData?.itemDetailMap || {};
-    const multTable = clientData?.enhancementLevelTotalBonusMultiplierTable || [];
-    let conc = 0;
-    if (selectedLoadout?.wearableMap && typeof selectedLoadout.wearableMap === "object") {
-      for (const raw of Object.values(selectedLoadout.wearableMap)) {
-        const parsed = parseLoadoutItemSpec(raw);
-        if (!parsed) continue;
-        const eq = itemDetailMap[parsed.itemHrid]?.equipmentDetail;
-        if (!eq) continue;
-        const base = eq.noncombatStats?.drinkConcentration || 0;
-        const enh = (eq.noncombatEnhancementBonuses?.drinkConcentration || 0) * (multTable[parsed.enhancementLevel] || 0);
-        conc += base + enh;
-      }
-      return 1 + Math.max(0, conc);
-    }
-    for (const item of characterItems) {
-      if (!item?.itemHrid || !item.itemLocationHrid || item.itemLocationHrid === "/item_locations/inventory") {
-        continue;
-      }
-      const eq = itemDetailMap[item.itemHrid]?.equipmentDetail;
-      if (!eq) continue;
-      const base = eq.noncombatStats?.drinkConcentration || 0;
-      const enh = (eq.noncombatEnhancementBonuses?.drinkConcentration || 0) * (multTable[item.enhancementLevel || 0] || 0);
-      conc += base + enh;
-    }
-    return 1 + Math.max(0, conc);
-  }
   function computeMaxCraftable(ctx, action, selectedLoadout, lookup) {
-    const inputItems = Array.isArray(action?.inputItems) ? action.inputItems : [];
-    const upgradeHrid = typeof action?.upgradeItemHrid === "string" ? action.upgradeItemHrid : "";
-    if (inputItems.length === 0 && !upgradeHrid) {
-      return { isInfinite: true, max: Infinity, bottleneck: "" };
-    }
-    const clientData = ctx.gameData.getClientData();
-    const characterItems = ctx.gameData.getCharacterItems();
-    const drinkSlotsMap = ctx.gameData.getActionTypeDrinkSlots();
-    const invAll = /* @__PURE__ */ new Map();
-    const invZeroEnh = /* @__PURE__ */ new Map();
-    for (const item of characterItems) {
-      if (!item?.itemHrid || !item.count || item.count <= 0) continue;
-      if (item.itemLocationHrid && item.itemLocationHrid !== "/item_locations/inventory") continue;
-      invAll.set(item.itemHrid, (invAll.get(item.itemHrid) || 0) + item.count);
-      if ((item.enhancementLevel || 0) === 0) {
-        invZeroEnh.set(item.itemHrid, (invZeroEnh.get(item.itemHrid) || 0) + item.count);
-      }
-    }
-    const loadoutDrinks = Array.isArray(selectedLoadout?.drinkItemHrids) ? selectedLoadout.drinkItemHrids.filter((h) => typeof h === "string" && h.length > 0) : [];
-    const slotDrinks = loadoutDrinks.length > 0 ? loadoutDrinks : (drinkSlotsMap.get(action.type) || []).map((d) => d?.itemHrid).filter(Boolean);
-    const hasArtisan = slotDrinks.includes("/items/artisan_tea");
-    const conc = hasArtisan ? computeDrinkConcentration(clientData, characterItems, selectedLoadout) : 1;
-    const artisanSaving = hasArtisan ? 0.1 * conc : 0;
-    let minMax = Infinity;
-    let bottleneck = "";
-    for (const inp of inputItems) {
-      const hrid = inp?.itemHrid;
-      const baseCount = Number(inp?.count) || 0;
-      if (!hrid || baseCount <= 0) continue;
-      const effNeed = baseCount * (1 - artisanSaving);
-      const have = invAll.get(hrid) || 0;
-      const canDo = effNeed > 0 ? Math.floor(have / effNeed) : Infinity;
-      if (canDo < minMax) {
-        minMax = canDo;
-        bottleneck = lookup.getItemName(hrid);
-      }
-    }
-    if (upgradeHrid) {
-      const haveBase = invZeroEnh.get(upgradeHrid) || 0;
-      if (haveBase < minMax) {
-        minMax = haveBase;
-        bottleneck = lookup.getItemName(upgradeHrid);
-      }
-    }
+    const res = computeMaterialLimit({
+      actionDetail: action,
+      clientData: ctx.gameData.getClientData(),
+      characterItems: ctx.gameData.getCharacterItems(),
+      drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
+      loadout: selectedLoadout
+    });
     return {
-      isInfinite: !Number.isFinite(minMax),
-      max: Number.isFinite(minMax) ? Math.max(0, minMax) : Infinity,
-      bottleneck
+      isInfinite: res.isInfinite,
+      max: res.max,
+      bottleneck: res.bottleneckHrid ? lookup.getItemName(res.bottleneckHrid) : ""
     };
   }
   function parseCurrentInputCount(input) {
@@ -24856,7 +24991,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
   ];
 
   // src/index.ts
-  var VERSION = "1.1.0";
+  var VERSION = HUGUNN_VERSION;
   function bootstrap() {
     const pageWin = getPageWindow();
     if (pageWin.__MWI_LITE_BOOTSTRAPPED__ || window.__MWI_LITE_BOOTSTRAPPED__) {

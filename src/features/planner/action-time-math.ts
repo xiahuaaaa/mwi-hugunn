@@ -1,5 +1,6 @@
 // Credit: Action timing & tea/equipment buff calculation aligned with Toolasha (Celasha, CC-BY-NC-SA-4.0) & MWITools (bot7420, shykai).
 import type { ActionTypeBuffSources } from "../../core/types";
+import { parseItemHash, resolveActionDrinks } from "./material-limit";
 
 export interface ActionEstimateInput {
   readonly action: any;
@@ -13,6 +14,8 @@ export interface ActionEstimateInput {
   readonly characterLoadouts: Record<string, any>;
   readonly drinkSlotsMap: ReadonlyMap<string, readonly any[]>;
   readonly nowMs?: number;
+  /** For infinite (no max count) actions: runs allowed by materials; turns ∞ into a finite estimate. */
+  readonly materialLimit?: number | null;
 }
 
 export interface ActionTimingEstimate {
@@ -24,6 +27,8 @@ export interface ActionTimingEstimate {
   readonly remainingActions: number;
   readonly totalSec: number;
   readonly isInfinite: boolean;
+  /** True when an infinite action's duration is bounded by `materialLimit`. */
+  readonly materialLimited: boolean;
 }
 
 const EFFICIENCY_FUNCTIONS = new Set([
@@ -31,18 +36,6 @@ const EFFICIENCY_FUNCTIONS = new Set([
   "/action_functions/production",
   "/action_functions/alchemy",
 ]);
-
-function parseLoadoutWearable(raw: unknown): { itemHrid: string; enhancementLevel: number } | null {
-  if (typeof raw !== "string" || !raw) return null;
-  const parts = raw.split("::");
-  const hrid = parts.find((p) => p.startsWith("/items/"));
-  if (!hrid) return null;
-  const enh = Number(parts[parts.length - 1]);
-  return {
-    itemHrid: hrid,
-    enhancementLevel: Number.isFinite(enh) && enh >= 0 ? enh : 0,
-  };
-}
 
 function getItemLevelFromHash(
   itemHash: unknown,
@@ -149,7 +142,7 @@ function collectLoadoutBonuses(
   const wearables = loadout?.wearableMap;
   if (wearables && typeof wearables === "object") {
     for (const raw of Object.values(wearables)) {
-      const parsed = parseLoadoutWearable(raw);
+      const parsed = parseItemHash(raw);
       if (!parsed) continue;
       const eq = itemDetailMap[parsed.itemHrid]?.equipmentDetail;
       if (!eq) continue;
@@ -171,13 +164,7 @@ function collectLoadoutBonuses(
     }
   }
 
-  const loadoutDrinks = Array.isArray(loadout?.drinkItemHrids)
-    ? loadout.drinkItemHrids.filter((h: unknown) => typeof h === "string" && h.length > 0)
-    : [];
-  const slotDrinks =
-    loadoutDrinks.length > 0
-      ? loadoutDrinks
-      : (drinkSlotsMap.get(actionType) || []).map((d) => d?.itemHrid).filter(Boolean);
+  const slotDrinks = resolveActionDrinks(actionType, loadout, drinkSlotsMap);
 
   const teaScale = 1 + Math.max(0, drinkConcentration);
   for (const hrid of slotDrinks) {
@@ -220,6 +207,7 @@ export function estimateActionTiming(input: ActionEstimateInput): ActionTimingEs
     characterLoadouts,
     drinkSlotsMap,
     nowMs = Date.now(),
+    materialLimit = null,
   } = input;
 
   const detail = clientData?.actionDetailMap?.[action?.actionHrid];
@@ -233,6 +221,7 @@ export function estimateActionTiming(input: ActionEstimateInput): ActionTimingEs
       remainingActions: 0,
       totalSec: 0,
       isInfinite: false,
+      materialLimited: false,
     };
   }
 
@@ -335,7 +324,14 @@ export function estimateActionTiming(input: ActionEstimateInput): ActionTimingEs
   const effectiveSecPerCount = perAttemptSec / effectiveRate;
 
   const hasMax = Boolean(action?.hasMaxCount && (action?.maxCount || 0) > 0);
-  const remainingActions = hasMax ? Math.max(0, action.maxCount - (action.currentCount || 0)) : 0;
+  const matLimit =
+    !hasMax && typeof materialLimit === "number" && Number.isFinite(materialLimit)
+      ? Math.max(0, Math.floor(materialLimit))
+      : null;
+  const bounded = hasMax || matLimit !== null;
+  const remainingActions = hasMax
+    ? Math.max(0, action.maxCount - (action.currentCount || 0))
+    : (matLimit ?? 0);
 
   let elapsedFraction = 0;
   if (actionIndex === 0 && action?.startTime) {
@@ -346,7 +342,7 @@ export function estimateActionTiming(input: ActionEstimateInput): ActionTimingEs
     }
   }
 
-  const totalSec = hasMax
+  const totalSec = bounded
     ? Math.max(0, remainingActions * effectiveSecPerCount - elapsedFraction)
     : 0;
 
@@ -358,6 +354,7 @@ export function estimateActionTiming(input: ActionEstimateInput): ActionTimingEs
     efficiency,
     remainingActions,
     totalSec,
-    isInfinite: !hasMax,
+    isInfinite: !bounded,
+    materialLimited: matLimit !== null,
   };
 }

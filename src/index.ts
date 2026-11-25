@@ -8,11 +8,12 @@ import {
   wsBus,
 } from "./core";
 import { mountPixelTheme } from "./core/pixel-theme";
+import { HUGUNN_VERSION } from "./core/version";
 import { combatModules, isLabyrinthWorkerActive } from "./features/combat";
 import { marketModules } from "./features/market";
 import { plannerModules } from "./features/planner";
 
-const VERSION = "1.1.0";
+const VERSION = HUGUNN_VERSION;
 
 function bootstrap(): void {
   const pageWin = getPageWindow() as any;

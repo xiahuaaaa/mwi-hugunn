@@ -1,6 +1,7 @@
 // Credit: Quick Input Buttons inspired by Toolasha (Celasha, CC-BY-NC-SA-4.0).
 import type { FeatureModule, KernelContext } from "../../core/types";
 import { estimateActionTiming } from "./action-time-math";
+import { computeMaterialLimit } from "./material-limit";
 import {
   buildLocalizedNameLookup,
   formatActionCount,
@@ -119,121 +120,23 @@ function findSelectedLoadout(
   return { loadoutId: null, loadout: null };
 }
 
-function parseLoadoutItemSpec(raw: unknown): { itemHrid: string; enhancementLevel: number } | null {
-  if (typeof raw !== "string" || !raw) return null;
-  const parts = raw.split("::");
-  const hrid = parts.find((p) => p.startsWith("/items/"));
-  if (!hrid) return null;
-  const enh = Number(parts[parts.length - 1]);
-  return { itemHrid: hrid, enhancementLevel: Number.isFinite(enh) && enh >= 0 ? enh : 0 };
-}
-
-function computeDrinkConcentration(
-  clientData: any,
-  characterItems: readonly any[],
-  selectedLoadout: any | null
-): number {
-  const itemDetailMap = clientData?.itemDetailMap || {};
-  const multTable: readonly number[] = clientData?.enhancementLevelTotalBonusMultiplierTable || [];
-  let conc = 0;
-
-  if (selectedLoadout?.wearableMap && typeof selectedLoadout.wearableMap === "object") {
-    for (const raw of Object.values(selectedLoadout.wearableMap)) {
-      const parsed = parseLoadoutItemSpec(raw);
-      if (!parsed) continue;
-      const eq = itemDetailMap[parsed.itemHrid]?.equipmentDetail;
-      if (!eq) continue;
-      const base = eq.noncombatStats?.drinkConcentration || 0;
-      const enh =
-        (eq.noncombatEnhancementBonuses?.drinkConcentration || 0) *
-        (multTable[parsed.enhancementLevel] || 0);
-      conc += base + enh;
-    }
-    return 1 + Math.max(0, conc);
-  }
-
-  for (const item of characterItems) {
-    if (!item?.itemHrid || !item.itemLocationHrid || item.itemLocationHrid === "/item_locations/inventory") {
-      continue;
-    }
-    const eq = itemDetailMap[item.itemHrid]?.equipmentDetail;
-    if (!eq) continue;
-    const base = eq.noncombatStats?.drinkConcentration || 0;
-    const enh =
-      (eq.noncombatEnhancementBonuses?.drinkConcentration || 0) *
-      (multTable[item.enhancementLevel || 0] || 0);
-    conc += base + enh;
-  }
-  return 1 + Math.max(0, conc);
-}
-
 function computeMaxCraftable(
   ctx: KernelContext,
   action: any,
   selectedLoadout: any | null,
   lookup: LocalizedNameLookup
 ): MaxCraftResult {
-  const inputItems: readonly any[] = Array.isArray(action?.inputItems) ? action.inputItems : [];
-  const upgradeHrid: string = typeof action?.upgradeItemHrid === "string" ? action.upgradeItemHrid : "";
-
-  if (inputItems.length === 0 && !upgradeHrid) {
-    return { isInfinite: true, max: Infinity, bottleneck: "" };
-  }
-
-  const clientData = ctx.gameData.getClientData();
-  const characterItems = ctx.gameData.getCharacterItems();
-  const drinkSlotsMap = ctx.gameData.getActionTypeDrinkSlots();
-
-  const invAll = new Map<string, number>();
-  const invZeroEnh = new Map<string, number>();
-  for (const item of characterItems) {
-    if (!item?.itemHrid || !item.count || item.count <= 0) continue;
-    if (item.itemLocationHrid && item.itemLocationHrid !== "/item_locations/inventory") continue;
-    invAll.set(item.itemHrid, (invAll.get(item.itemHrid) || 0) + item.count);
-    if ((item.enhancementLevel || 0) === 0) {
-      invZeroEnh.set(item.itemHrid, (invZeroEnh.get(item.itemHrid) || 0) + item.count);
-    }
-  }
-
-  const loadoutDrinks = Array.isArray(selectedLoadout?.drinkItemHrids)
-    ? selectedLoadout.drinkItemHrids.filter((h: unknown) => typeof h === "string" && h.length > 0)
-    : [];
-  const slotDrinks =
-    loadoutDrinks.length > 0
-      ? loadoutDrinks
-      : (drinkSlotsMap.get(action.type) || []).map((d: any) => d?.itemHrid).filter(Boolean);
-  const hasArtisan = slotDrinks.includes("/items/artisan_tea");
-  const conc = hasArtisan ? computeDrinkConcentration(clientData, characterItems, selectedLoadout) : 1;
-  const artisanSaving = hasArtisan ? 0.1 * conc : 0;
-
-  let minMax = Infinity;
-  let bottleneck = "";
-
-  for (const inp of inputItems) {
-    const hrid = inp?.itemHrid;
-    const baseCount = Number(inp?.count) || 0;
-    if (!hrid || baseCount <= 0) continue;
-    const effNeed = baseCount * (1 - artisanSaving);
-    const have = invAll.get(hrid) || 0;
-    const canDo = effNeed > 0 ? Math.floor(have / effNeed) : Infinity;
-    if (canDo < minMax) {
-      minMax = canDo;
-      bottleneck = lookup.getItemName(hrid);
-    }
-  }
-
-  if (upgradeHrid) {
-    const haveBase = invZeroEnh.get(upgradeHrid) || 0;
-    if (haveBase < minMax) {
-      minMax = haveBase;
-      bottleneck = lookup.getItemName(upgradeHrid);
-    }
-  }
-
+  const res = computeMaterialLimit({
+    actionDetail: action,
+    clientData: ctx.gameData.getClientData(),
+    characterItems: ctx.gameData.getCharacterItems(),
+    drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
+    loadout: selectedLoadout,
+  });
   return {
-    isInfinite: !Number.isFinite(minMax),
-    max: Number.isFinite(minMax) ? Math.max(0, minMax) : Infinity,
-    bottleneck,
+    isInfinite: res.isInfinite,
+    max: res.max,
+    bottleneck: res.bottleneckHrid ? lookup.getItemName(res.bottleneckHrid) : "",
   };
 }
 

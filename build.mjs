@@ -13,12 +13,17 @@ function buildHugunnIconDataUri() {
 }
 
 const iconDataUri = buildHugunnIconDataUri();
+// Single source of truth for the userscript / Greasy Fork @version and the in-app version label.
+const { version } = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
+if (!/^\d+\.\d+\.\d+/.test(version || "")) {
+  throw new Error(`Invalid package.json version: ${version}`);
+}
 
 const banner = `// ==UserScript==
 // @name         MWI · Hugunn
 // @name:zh-CN   MWI · Hugunn
 // @namespace    https://milkywayidle.com/mwi-hugunn
-// @version      1.1.0
+// @version      ${version}
 // @description  Tired of reinstalling a pile of laggy, mismatched scripts on every device? Fast! Lightweight! One script is all you need—come fight me if it's not! 15-in-1 MWI suite, zero deps & 100% read-only.
 // @description:zh-CN 受够了换设备就重装一堆卡顿又杂乱的脚本？快速！轻量！一个就够！不好用你来打我！15合1 MWI 聚合插件（市场/规划/迷宫/战斗），零依赖纯只读。
 // @author       adudu
@@ -65,8 +70,9 @@ await build({
   legalComments: "none",
   minify: false,
   banner: { js: banner },
+  define: { __HUGUNN_VERSION__: JSON.stringify(version) },
 });
 
 const outPath = path.resolve("dist/mwi-hugunn.user.js");
 const stat = fs.statSync(outPath);
-console.log(`Built ${outPath} (${(stat.size / 1024).toFixed(1)} KB)`);
+console.log(`Built ${outPath} v${version} (${(stat.size / 1024).toFixed(1)} KB)`);

@@ -44,3 +44,11 @@ Run and verify all checks in `cd /Users/xhy/Developer/mwi-lite-suite && ...` bef
 3. **Behavioral verification**:
    - Pure calculation engines pass in-memory Node numerical & edge-case assertions (leaving no temporary files in the repo);
    - UI / WS modules pass isolated page verification (clean `about:blank` + native `new MessageEvent('message', { data })`—always use native `MessageEvent`, since `Proxy` triggers `Illegal invocation` on extension getters) and zero-error load verification on `https://test.milkywayidle.com` without touching live accounts.
+
+## 6. Versioning
+
+Every update to the plugin (feature, fix, refactor, or any change that alters `dist/mwi-hugunn.user.js`) must bump the version before release:
+
+- **JS version**: bump `"version"` in [package.json](package.json) — the single source of truth (semver: patch for fixes, minor for features, major for breaking changes).
+- **Greasy Fork version**: the `// @version` userscript header and the in-app version label (settings dialog, diagnostic handle) are generated from `package.json` by [build.mjs](build.mjs) via `__HUGUNN_VERSION__` / [src/core/version.ts](src/core/version.ts). Never hardcode a version string elsewhere. Greasy Fork only ships an update when `@version` increases.
+- Rebuild after bumping so `dist/mwi-hugunn.user.js` carries the new `@version`.

@@ -4,6 +4,7 @@ import { getHugunnIconSvg } from "./pixel-theme";
 import { registry } from "./registry";
 import { addStyle } from "./storage";
 import type { FeatureCategory } from "./types";
+import { HUGUNN_VERSION } from "./version";
 
 declare const GM_registerMenuCommand: ((name: string, fn: () => void) => void) | undefined;
 
@@ -218,7 +219,7 @@ export function mountSettingsUI(isWorkerActiveFn: () => boolean): void {
       <div class="mwi-lite-card">
         <div class="mwi-lite-header">
           <div>
-            <div class="mwi-lite-title">${getHugunnIconSvg(18)}<span>MWI · Hugunn v1.1.0</span></div>
+            <div class="mwi-lite-title">${getHugunnIconSvg(18)}<span>MWI · Hugunn v${HUGUNN_VERSION}</span></div>
             <div class="mwi-lite-status">
               ${i18n.t(`已启用 ${enabledCount}/${items.length} 模块`, `${enabledCount}/${items.length} modules enabled`)}
               · ${i18n.t("当前路由", "Route")}: <b>${domScheduler.getActiveRoute()}</b>

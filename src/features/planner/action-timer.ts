@@ -1,5 +1,6 @@
 import type { FeatureModule, KernelContext } from "../../core/types";
 import { estimateActionTiming, type ActionTimingEstimate } from "./action-time-math";
+import { computeMaterialLimit, type MaterialLimitResult } from "./material-limit";
 
 const HEADER_TIMER_ID = "mwi-lite-action-timer";
 const QUEUE_TAG_CLASS = "mwi-lite-queue-time-tag";
@@ -29,7 +30,11 @@ function formatFinishClock(secFromNow: number): string {
   return `${hh}:${mm}`;
 }
 
-function formatTimingTooltip(ctx: KernelContext, est: ActionTimingEstimate): string {
+function formatTimingTooltip(
+  ctx: KernelContext,
+  est: ActionTimingEstimate,
+  limit?: MaterialLimitResult | null
+): string {
   const parts = [
     `${ctx.i18n.t("单次", "Attempt")}: ${est.perAttemptSec.toFixed(2)}s`,
     `${ctx.i18n.t("加速", "Speed")}: +${(est.actionSpeed * 100).toFixed(1)}%`,
@@ -41,7 +46,26 @@ function formatTimingTooltip(ctx: KernelContext, est: ActionTimingEstimate): str
     parts.push(`${ctx.i18n.t("效率", "Efficiency")}: +${(est.efficiency * 100).toFixed(1)}%`);
     parts.push(`${ctx.i18n.t("等效", "Eff")}: ${est.effectiveSecPerCount.toFixed(2)}s/${ctx.i18n.t("次", "act")}`);
   }
+  if (est.materialLimited && limit && !limit.isInfinite) {
+    const name = limit.bottleneckHrid ? ctx.i18n.getItemName(limit.bottleneckHrid) : "";
+    parts.push(
+      `${ctx.i18n.t("材料可做", "Materials allow")}: ${est.remainingActions.toLocaleString()} ${ctx.i18n.t("次", "acts")}` +
+        (name ? ` (${ctx.i18n.t("瓶颈", "bottleneck")}: ${name})` : "")
+    );
+  }
   return parts.join(" · ");
+}
+
+/** Prefix for durations bounded by materials of an infinite action. */
+function durationText(est: ActionTimingEstimate, sec: number): string {
+  return `${est.materialLimited ? "~" : ""}${formatDuration(sec)}`;
+}
+
+// Material limits only change on inventory / drink / loadout / queue events, not every 1s tick.
+const materialLimitCache = new Map<string, MaterialLimitResult>();
+
+function clearMaterialLimitCache(): void {
+  materialLimitCache.clear();
 }
 
 function buildActionEstimator(ctx: KernelContext, actions: readonly any[]) {
@@ -55,10 +79,41 @@ function buildActionEstimator(ctx: KernelContext, actions: readonly any[]) {
   const currentActionLoadoutId = actions[0]?.characterLoadoutID ?? null;
   const nowMs = Date.now();
 
-  return (action: any, index: number): ActionTimingEstimate =>
-    estimateActionTiming({
+  const limitFor = (action: any, index: number): MaterialLimitResult | null => {
+    if (action?.hasMaxCount && (action?.maxCount || 0) > 0) return null;
+    const detail = clientData?.actionDetailMap?.[action?.actionHrid];
+    if (!detail) return null;
+    const loadoutId = action?.characterLoadoutID;
+    const loadout =
+      index > 0 &&
+      typeof loadoutId === "number" &&
+      loadoutId > 0 &&
+      loadoutId !== currentActionLoadoutId &&
+      characterLoadouts?.[loadoutId]
+        ? characterLoadouts[loadoutId]
+        : null;
+    const key = `${action.actionHrid}|${loadout ? loadoutId : 0}|${action.primaryItemHash || ""}|${action.secondaryItemHash || ""}|${action.enhancingMaxLevel || 0}`;
+    let res = materialLimitCache.get(key);
+    if (!res) {
+      res = computeMaterialLimit({
+        actionDetail: detail,
+        clientData,
+        characterItems,
+        drinkSlotsMap,
+        loadout,
+        actionInstance: action,
+      });
+      materialLimitCache.set(key, res);
+    }
+    return res;
+  };
+
+  const estimate = (action: any, index: number): ActionTimingEstimate => {
+    const limit = limitFor(action, index);
+    return estimateActionTiming({
       action,
       actionIndex: index,
+      materialLimit: limit && !limit.isInfinite ? limit.max : null,
       currentActionLoadoutId,
       clientData,
       buffSources,
@@ -69,6 +124,8 @@ function buildActionEstimator(ctx: KernelContext, actions: readonly any[]) {
       drinkSlotsMap,
       nowMs,
     });
+  };
+  return { estimate, limitFor };
 }
 
 export function createActionTimerModule(): FeatureModule {
@@ -100,7 +157,7 @@ export function createActionTimerModule(): FeatureModule {
       actionNameEl.parentElement.insertBefore(timerEl, actionNameEl.nextSibling);
     }
 
-    const estimateAt = buildActionEstimator(ctx, actions);
+    const { estimate: estimateAt, limitFor } = buildActionEstimator(ctx, actions);
     const curEst = estimateAt(current, 0);
     if (curEst.perAttemptSec <= 0) {
       timerEl.textContent = "";
@@ -110,28 +167,32 @@ export function createActionTimerModule(): FeatureModule {
 
     let queueTotal = curEst.totalSec;
     let queueInf = curEst.isInfinite;
+    let queueMat = curEst.materialLimited;
     for (let i = 1; i < actions.length; i++) {
       const est = estimateAt(actions[i], i);
       if (est.isInfinite) queueInf = true;
+      if (est.materialLimited) queueMat = true;
       queueTotal += est.totalSec;
     }
 
+    const curClock = formatFinishClock(curEst.totalSec);
     const curPart = curEst.isInfinite
       ? `∞ (${curEst.perAttemptSec.toFixed(2)}s)`
-      : `${formatDuration(curEst.totalSec)} → ${formatFinishClock(curEst.totalSec)}`;
+      : `${durationText(curEst, curEst.totalSec)}${curClock ? ` → ${curClock}` : ""}`;
 
+    const totalClock = formatFinishClock(queueTotal);
     const queuePart =
       actions.length > 1
         ? queueInf
           ? ` | ${ctx.i18n.t("队列", "Q")}: ∞`
-          : ` | ${ctx.i18n.t("总计", "Total")}: ${formatDuration(queueTotal)} (${formatFinishClock(queueTotal)})`
+          : ` | ${ctx.i18n.t("总计", "Total")}: ${queueMat ? "~" : ""}${formatDuration(queueTotal)}${totalClock ? ` (${totalClock})` : ""}`
         : "";
 
     const nextText = `⏱ ${curPart}${queuePart}`;
     if (timerEl.textContent !== nextText) {
       timerEl.textContent = nextText;
     }
-    const nextTitle = formatTimingTooltip(ctx, curEst);
+    const nextTitle = formatTimingTooltip(ctx, curEst, limitFor(current, 0));
     if (timerEl.title !== nextTitle) {
       timerEl.title = nextTitle;
     }
@@ -152,7 +213,7 @@ export function createActionTimerModule(): FeatureModule {
 
     const menu = document.querySelector('[class*="QueuedActions_queuedActionsEditMenu"]');
     if (menu) {
-      const estimateAt = buildActionEstimator(context, actions);
+      const { estimate: estimateAt, limitFor } = buildActionEstimator(context, actions);
       const firstEst = estimateAt(actions[0], 0);
       let accSec = firstEst.totalSec;
       let hasInf = firstEst.isInfinite;
@@ -174,14 +235,26 @@ export function createActionTimerModule(): FeatureModule {
           tag.setAttribute("data-mwi-lite", "1");
           row.appendChild(tag);
         }
+        const rowClock = hasInf ? "" : formatFinishClock(idx === 0 ? firstEst.totalSec : accSec);
         const txt = est.isInfinite
           ? `∞ (${est.perAttemptSec.toFixed(2)}s)`
-          : `${formatDuration(est.totalSec)}${hasInf ? "" : ` (${formatFinishClock(idx === 0 ? firstEst.totalSec : accSec)})`}`;
+          : `${durationText(est, est.totalSec)}${rowClock ? ` (${rowClock})` : ""}`;
         if (tag.textContent !== txt) tag.textContent = txt;
-        const tip = formatTimingTooltip(context, est);
+        const tip = formatTimingTooltip(context, est, limitFor(actions[idx], idx));
         if (tag.title !== tip) tag.title = tip;
       });
     }
+  };
+
+  const onMaterialsChanged = () => {
+    clearMaterialLimitCache();
+    syncTimers();
+  };
+
+  const onActionCompleted = () => {
+    clearMaterialLimitCache();
+    updateHeaderBar();
+    updateQueuePopups();
   };
 
   const syncTimers = () => {
@@ -249,13 +322,14 @@ export function createActionTimerModule(): FeatureModule {
       );
 
       unsubs = [
-        ctx.gameData.on("character_initialized", syncTimers),
-        ctx.gameData.on("actions_updated", syncTimers),
-        ctx.gameData.on("action_completed", updateHeaderBar),
-        ctx.gameData.on("buffs_updated", syncTimers),
+        ctx.gameData.on("character_initialized", onMaterialsChanged),
+        ctx.gameData.on("actions_updated", onMaterialsChanged),
+        ctx.gameData.on("action_completed", onActionCompleted),
+        ctx.gameData.on("items_updated", onMaterialsChanged),
+        ctx.gameData.on("buffs_updated", onMaterialsChanged),
         ctx.gameData.on("skills_updated", syncTimers),
         ctx.gameData.on("house_rooms_updated", syncTimers),
-        ctx.gameData.on("consumables_updated", syncTimers),
+        ctx.gameData.on("consumables_updated", onMaterialsChanged),
         ctx.gameData.on("personal_buffs_updated", syncTimers),
         ctx.gameData.on("quests_updated", syncTimers),
       ];
@@ -272,6 +346,7 @@ export function createActionTimerModule(): FeatureModule {
           clearInterval(intervalId);
           intervalId = null;
         }
+        clearMaterialLimitCache();
         document.getElementById(HEADER_TIMER_ID)?.remove();
         document.querySelectorAll(`.${QUEUE_TAG_CLASS}`).forEach((el) => el.remove());
       };
