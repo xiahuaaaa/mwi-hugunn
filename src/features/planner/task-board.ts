@@ -11,6 +11,7 @@ export const TASK_AUTO_N1_MODULE_ID = "planner-task-auto-n1";
 
 const TASK_SORT_PREF_KEY = "task_board_sort_pref_v1";
 const TASK_LIST_SEL = '[class*="TasksPanel_taskList"]';
+const UNREAD_TASKS_SEL = '[class*="TasksPanel_unreadTasks"]';
 const TASK_CARD_SEL = '[class*="RandomTask_randomTask"]';
 const TASK_ACTION_SEL = '[class*="RandomTask_action"]';
 const TASK_NAME_SEL = '[class*="RandomTask_name"]';
@@ -316,20 +317,30 @@ export function createTaskBoardModule(): FeatureModule {
   const queueFeedbackMap = new Map<string, { label: string; tone: "ok" | "err"; expiresAt: number }>();
   const pinnedRerollCards = new Set<HTMLElement>();
   const expandingRerollCards = new Set<HTMLElement>();
+  const pinnedUnreadCards = new Set<HTMLElement>();
   let pendingRerollReplace: {
     oldCard: HTMLElement;
     slotIdx: number;
     prevKnownCards: Set<HTMLElement>;
     expiresAt: number;
   } | null = null;
+  let pendingUnreadReveal: {
+    prevKnownCards: Set<HTMLElement>;
+    expiresAt: number;
+  } | null = null;
   let destroyed = false;
 
-  const clearRerollPins = () => {
+  const clearTaskPins = () => {
     pinnedRerollCards.clear();
     expandingRerollCards.clear();
+    pinnedUnreadCards.clear();
     pendingRerollReplace = null;
+    pendingUnreadReveal = null;
     document.querySelectorAll("[data-mwi-reroll-pinned]").forEach((el) => {
       el.removeAttribute("data-mwi-reroll-pinned");
+    });
+    document.querySelectorAll("[data-mwi-unread-pinned]").forEach((el) => {
+      el.removeAttribute("data-mwi-unread-pinned");
     });
   };
 
@@ -666,6 +677,39 @@ export function createTaskBoardModule(): FeatureModule {
     return preserveIdx ? a.idx - b.idx : 0;
   };
 
+  const reconcilePendingUnreadReveal = (taskList: Element, cards: HTMLElement[]): HTMLElement[] => {
+    if (!pendingUnreadReveal) return cards;
+    if (Date.now() > pendingUnreadReveal.expiresAt) {
+      pendingUnreadReveal = null;
+      return cards;
+    }
+    const prevKnown = pendingUnreadReveal.prevKnownCards;
+    const added = cards.filter((c) => !prevKnown.has(c));
+    if (added.length === 0) return cards;
+
+    const firstExisting = cards.find((c) => prevKnown.has(c)) || null;
+    for (const card of added) {
+      pinnedUnreadCards.add(card);
+      card.setAttribute("data-mwi-unread-pinned", "1");
+    }
+    if (firstExisting) {
+      let alreadyAtTop = true;
+      for (let i = 0; i < added.length; i++) {
+        if (cards[i] !== added[i]) {
+          alreadyAtTop = false;
+          break;
+        }
+      }
+      if (!alreadyAtTop) {
+        for (const card of added) {
+          taskList.insertBefore(card, firstExisting);
+        }
+      }
+    }
+    pendingUnreadReveal = null;
+    return Array.from(taskList.children).filter((el): el is HTMLElement => el.matches(TASK_CARD_SEL));
+  };
+
   const reconcilePendingRerollReplacement = (taskList: Element, cards: HTMLElement[]): HTMLElement[] => {
     if (!pendingRerollReplace) return cards;
     const now = Date.now();
@@ -682,11 +726,13 @@ export function createTaskBoardModule(): FeatureModule {
     if (!replacement) {
       pinnedRerollCards.delete(pendingRerollReplace.oldCard);
       expandingRerollCards.delete(pendingRerollReplace.oldCard);
+      pinnedUnreadCards.delete(pendingRerollReplace.oldCard);
       pendingRerollReplace = null;
       return cards;
     }
     pinnedRerollCards.delete(pendingRerollReplace.oldCard);
     expandingRerollCards.delete(pendingRerollReplace.oldCard);
+    pinnedUnreadCards.delete(pendingRerollReplace.oldCard);
     pinnedRerollCards.add(replacement);
     replacement.setAttribute("data-mwi-reroll-pinned", "1");
 
@@ -703,11 +749,6 @@ export function createTaskBoardModule(): FeatureModule {
   const sortTaskCards = (force = false) => {
     if (!ctx) return;
     if (!force && !autoSort) return;
-    if (!force && Date.now() - lastPointerDownTs < 250) {
-      const id = window.setTimeout(() => sortTaskCards(false), 260);
-      timers.push(id);
-      return;
-    }
 
     const taskList = findRealGameElement(document, TASK_LIST_SEL);
     if (!taskList) return;
@@ -715,6 +756,16 @@ export function createTaskBoardModule(): FeatureModule {
     let cards = Array.from(taskList.children).filter(
       (el): el is HTMLElement => el.matches(TASK_CARD_SEL)
     );
+    if (!force) {
+      cards = reconcilePendingUnreadReveal(taskList, cards);
+    }
+
+    if (!force && Date.now() - lastPointerDownTs < 250) {
+      const id = window.setTimeout(() => sortTaskCards(false), 260);
+      timers.push(id);
+      return;
+    }
+
     cards = reconcilePendingRerollReplacement(taskList, cards);
     if (cards.length < 2) return;
 
@@ -724,12 +775,20 @@ export function createTaskBoardModule(): FeatureModule {
     for (const c of expandingRerollCards) {
       if (!c.isConnected) expandingRerollCards.delete(c);
     }
+    for (const c of pinnedUnreadCards) {
+      if (!c.isConnected) pinnedUnreadCards.delete(c);
+    }
 
     const ordered: Array<HTMLElement | null> = new Array(cards.length).fill(null);
     const unpinned: CardSortKey[] = [];
     for (let i = 0; i < cards.length; i++) {
       const card = cards[i];
-      if (!force && (pinnedRerollCards.has(card) || expandingRerollCards.has(card))) {
+      if (
+        !force &&
+        (pinnedUnreadCards.has(card) ||
+          pinnedRerollCards.has(card) ||
+          expandingRerollCards.has(card))
+      ) {
         ordered[i] = card;
       } else {
         unpinned.push(buildCardSortKey(card, i));
@@ -907,7 +966,7 @@ export function createTaskBoardModule(): FeatureModule {
       e.stopPropagation();
       sortMode = sortMode === "skill" ? "name" : "skill";
       manualSortedActive = true;
-      clearRerollPins();
+      clearTaskPins();
       syncLabels();
       savePref();
       sortTaskCards(true);
@@ -929,7 +988,7 @@ export function createTaskBoardModule(): FeatureModule {
       autoSort = !autoSort;
       if (autoSort) {
         manualSortedActive = false;
-        clearRerollPins();
+        clearTaskPins();
       }
       syncAuto();
       savePref();
@@ -1481,6 +1540,16 @@ export function createTaskBoardModule(): FeatureModule {
           const target = ev.target instanceof Element ? ev.target : null;
           const btn = target?.closest("button");
           if (!btn || btn.hasAttribute("data-mwi-lite")) return;
+          if (btn.closest(UNREAD_TASKS_SEL)) {
+            const curCards = Array.from(taskList.children).filter(
+              (el): el is HTMLElement => el.matches(TASK_CARD_SEL)
+            );
+            pendingUnreadReveal = {
+              prevKnownCards: new Set(curCards),
+              expiresAt: Date.now() + 5000,
+            };
+            return;
+          }
           const card = btn.closest<HTMLElement>(TASK_CARD_SEL);
           if (!card) return;
           const text = (btn.textContent || "").trim();
@@ -1730,7 +1799,7 @@ export function createTaskBoardModule(): FeatureModule {
       unregInit = ctx.gameData.on("character_initialized", scheduleTasksRefresh);
       unregRoute = ctx.domScheduler.onRouteChange((nextRoute) => {
         if (nextRoute !== "tasks" && !isQuickQueueing) {
-          clearRerollPins();
+          clearTaskPins();
         }
       });
 
@@ -1738,7 +1807,7 @@ export function createTaskBoardModule(): FeatureModule {
         destroyed = true;
         isQuickQueueing = false;
         manualSortedActive = false;
-        clearRerollPins();
+        clearTaskPins();
         cooldownWaitStartTs = 0;
         quickQueueAsyncCleanup?.();
         quickQueueAsyncCleanup = null;

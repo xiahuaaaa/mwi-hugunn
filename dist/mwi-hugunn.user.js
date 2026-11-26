@@ -2,7 +2,7 @@
 // @name         MWI · Hugunn
 // @name:zh-CN   MWI · Hugunn
 // @namespace    https://milkywayidle.com/mwi-hugunn
-// @version      1.2.0
+// @version      1.2.1
 // @description  Tired of reinstalling a pile of laggy, mismatched scripts on every device? Fast! Lightweight! One script is all you need—come fight me if it's not! 15-in-1 MWI suite, zero deps & 100% read-only.
 // @description:zh-CN 受够了换设备就重装一堆卡顿又杂乱的脚本？快速！轻量！一个就够！不好用你来打我！15合1 MWI 聚合插件（市场/规划/迷宫/战斗），零依赖纯只读。
 // @author       adudu
@@ -1791,7 +1791,7 @@
   }
 
   // src/core/version.ts
-  var HUGUNN_VERSION = true ? "1.2.0" : "dev";
+  var HUGUNN_VERSION = true ? "1.2.1" : "dev";
 
   // src/core/settings-ui.ts
   var SETTINGS_BTN_ID = "mwi-lite-settings-btn";
@@ -23418,6 +23418,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
   var TASK_AUTO_N1_MODULE_ID = "planner-task-auto-n1";
   var TASK_SORT_PREF_KEY = "task_board_sort_pref_v1";
   var TASK_LIST_SEL = '[class*="TasksPanel_taskList"]';
+  var UNREAD_TASKS_SEL = '[class*="TasksPanel_unreadTasks"]';
   var TASK_CARD_SEL = '[class*="RandomTask_randomTask"]';
   var TASK_ACTION_SEL = '[class*="RandomTask_action"]';
   var TASK_NAME_SEL = '[class*="RandomTask_name"]';
@@ -23678,14 +23679,21 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const queueFeedbackMap = /* @__PURE__ */ new Map();
     const pinnedRerollCards = /* @__PURE__ */ new Set();
     const expandingRerollCards = /* @__PURE__ */ new Set();
+    const pinnedUnreadCards = /* @__PURE__ */ new Set();
     let pendingRerollReplace = null;
+    let pendingUnreadReveal = null;
     let destroyed = false;
-    const clearRerollPins = () => {
+    const clearTaskPins = () => {
       pinnedRerollCards.clear();
       expandingRerollCards.clear();
+      pinnedUnreadCards.clear();
       pendingRerollReplace = null;
+      pendingUnreadReveal = null;
       document.querySelectorAll("[data-mwi-reroll-pinned]").forEach((el) => {
         el.removeAttribute("data-mwi-reroll-pinned");
+      });
+      document.querySelectorAll("[data-mwi-unread-pinned]").forEach((el) => {
+        el.removeAttribute("data-mwi-unread-pinned");
       });
     };
     const spriteUrls = {};
@@ -23980,6 +23988,37 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       if (cmp !== 0) return cmp;
       return preserveIdx ? a.idx - b.idx : 0;
     };
+    const reconcilePendingUnreadReveal = (taskList, cards) => {
+      if (!pendingUnreadReveal) return cards;
+      if (Date.now() > pendingUnreadReveal.expiresAt) {
+        pendingUnreadReveal = null;
+        return cards;
+      }
+      const prevKnown = pendingUnreadReveal.prevKnownCards;
+      const added = cards.filter((c) => !prevKnown.has(c));
+      if (added.length === 0) return cards;
+      const firstExisting = cards.find((c) => prevKnown.has(c)) || null;
+      for (const card of added) {
+        pinnedUnreadCards.add(card);
+        card.setAttribute("data-mwi-unread-pinned", "1");
+      }
+      if (firstExisting) {
+        let alreadyAtTop = true;
+        for (let i = 0; i < added.length; i++) {
+          if (cards[i] !== added[i]) {
+            alreadyAtTop = false;
+            break;
+          }
+        }
+        if (!alreadyAtTop) {
+          for (const card of added) {
+            taskList.insertBefore(card, firstExisting);
+          }
+        }
+      }
+      pendingUnreadReveal = null;
+      return Array.from(taskList.children).filter((el) => el.matches(TASK_CARD_SEL));
+    };
     const reconcilePendingRerollReplacement = (taskList, cards) => {
       if (!pendingRerollReplace) return cards;
       const now = Date.now();
@@ -23995,11 +24034,13 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       if (!replacement) {
         pinnedRerollCards.delete(pendingRerollReplace.oldCard);
         expandingRerollCards.delete(pendingRerollReplace.oldCard);
+        pinnedUnreadCards.delete(pendingRerollReplace.oldCard);
         pendingRerollReplace = null;
         return cards;
       }
       pinnedRerollCards.delete(pendingRerollReplace.oldCard);
       expandingRerollCards.delete(pendingRerollReplace.oldCard);
+      pinnedUnreadCards.delete(pendingRerollReplace.oldCard);
       pinnedRerollCards.add(replacement);
       replacement.setAttribute("data-mwi-reroll-pinned", "1");
       const withoutNew = cards.filter((c) => c !== replacement);
@@ -24014,16 +24055,19 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const sortTaskCards = (force = false) => {
       if (!ctx) return;
       if (!force && !autoSort) return;
-      if (!force && Date.now() - lastPointerDownTs < 250) {
-        const id = window.setTimeout(() => sortTaskCards(false), 260);
-        timers.push(id);
-        return;
-      }
       const taskList = findRealGameElement(document, TASK_LIST_SEL);
       if (!taskList) return;
       let cards = Array.from(taskList.children).filter(
         (el) => el.matches(TASK_CARD_SEL)
       );
+      if (!force) {
+        cards = reconcilePendingUnreadReveal(taskList, cards);
+      }
+      if (!force && Date.now() - lastPointerDownTs < 250) {
+        const id = window.setTimeout(() => sortTaskCards(false), 260);
+        timers.push(id);
+        return;
+      }
       cards = reconcilePendingRerollReplacement(taskList, cards);
       if (cards.length < 2) return;
       for (const c of pinnedRerollCards) {
@@ -24032,11 +24076,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       for (const c of expandingRerollCards) {
         if (!c.isConnected) expandingRerollCards.delete(c);
       }
+      for (const c of pinnedUnreadCards) {
+        if (!c.isConnected) pinnedUnreadCards.delete(c);
+      }
       const ordered = new Array(cards.length).fill(null);
       const unpinned = [];
       for (let i = 0; i < cards.length; i++) {
         const card = cards[i];
-        if (!force && (pinnedRerollCards.has(card) || expandingRerollCards.has(card))) {
+        if (!force && (pinnedUnreadCards.has(card) || pinnedRerollCards.has(card) || expandingRerollCards.has(card))) {
           ordered[i] = card;
         } else {
           unpinned.push(buildCardSortKey(card, i));
@@ -24191,7 +24238,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         e.stopPropagation();
         sortMode = sortMode === "skill" ? "name" : "skill";
         manualSortedActive = true;
-        clearRerollPins();
+        clearTaskPins();
         syncLabels();
         savePref();
         sortTaskCards(true);
@@ -24210,7 +24257,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         autoSort = !autoSort;
         if (autoSort) {
           manualSortedActive = false;
-          clearRerollPins();
+          clearTaskPins();
         }
         syncAuto();
         savePref();
@@ -24682,6 +24729,16 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
             const target = ev.target instanceof Element ? ev.target : null;
             const btn = target?.closest("button");
             if (!btn || btn.hasAttribute("data-mwi-lite")) return;
+            if (btn.closest(UNREAD_TASKS_SEL)) {
+              const curCards = Array.from(taskList.children).filter(
+                (el) => el.matches(TASK_CARD_SEL)
+              );
+              pendingUnreadReveal = {
+                prevKnownCards: new Set(curCards),
+                expiresAt: Date.now() + 5e3
+              };
+              return;
+            }
             const card = btn.closest(TASK_CARD_SEL);
             if (!card) return;
             const text = (btn.textContent || "").trim();
@@ -24924,14 +24981,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         unregInit = ctx.gameData.on("character_initialized", scheduleTasksRefresh);
         unregRoute = ctx.domScheduler.onRouteChange((nextRoute) => {
           if (nextRoute !== "tasks" && !isQuickQueueing) {
-            clearRerollPins();
+            clearTaskPins();
           }
         });
         return () => {
           destroyed = true;
           isQuickQueueing = false;
           manualSortedActive = false;
-          clearRerollPins();
+          clearTaskPins();
           cooldownWaitStartTs = 0;
           quickQueueAsyncCleanup?.();
           quickQueueAsyncCleanup = null;
