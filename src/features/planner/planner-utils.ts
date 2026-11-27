@@ -122,3 +122,116 @@ export function buildLocalizedNameLookup(context: KernelContext): LocalizedNameL
 
   return { actionNameToHrids, getItemName };
 }
+
+export interface ActionResolveResult {
+  actionHrid: string;
+  action: any;
+  isCombat: boolean;
+}
+
+function getDirectText(el: Element | null): string {
+  if (!el) return "";
+  let text = "";
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.nodeValue || "";
+    }
+  }
+  const trimmed = text.trim();
+  return trimmed || (el.textContent || "").trim();
+}
+
+function parseSpriteHint(detail: Element): string {
+  const uses = detail.querySelectorAll("use");
+  for (const u of uses) {
+    if (u.closest("[data-mwi-lite]")) continue;
+    const href = u.getAttribute("href") || u.getAttribute("xlink:href") || "";
+    const hashIdx = href.indexOf("#");
+    if (hashIdx < 0) continue;
+    const key = href.slice(hashIdx + 1).trim();
+    if (href.includes("skills_sprite") && key) {
+      return `/action_types/${key}`;
+    }
+  }
+  return "";
+}
+
+export function resolveDetailAction(
+  detail: Element,
+  clientData: any,
+  lookup: LocalizedNameLookup
+): ActionResolveResult | null {
+  const actionMap: Record<string, any> = clientData?.actionDetailMap || {};
+  const nameEl = detail.querySelector('[class*="SkillActionDetail_name"]');
+  const actionName = getDirectText(nameEl);
+  if (!actionName) return null;
+
+  const isInCombatPanel = Boolean(detail.closest('[class*="CombatPanel_combatPanel"]'));
+  const typeHint = isInCombatPanel ? "/action_types/combat" : parseSpriteHint(detail);
+  const candidates = lookup.actionNameToHrids.get(actionName.toLowerCase()) || [];
+
+  if (typeHint) {
+    const exact = candidates.find((hrid) => actionMap[hrid]?.type === typeHint);
+    if (exact && actionMap[exact]) {
+      return {
+        actionHrid: exact,
+        action: actionMap[exact],
+        isCombat: actionMap[exact].type === "/action_types/combat" || isInCombatPanel,
+      };
+    }
+  }
+
+  for (const hrid of candidates) {
+    const act = actionMap[hrid];
+    if (act) {
+      return {
+        actionHrid: hrid,
+        action: act,
+        isCombat: act.type === "/action_types/combat" || isInCombatPanel,
+      };
+    }
+  }
+  return null;
+}
+
+export function findSelectedLoadout(
+  detail: Element,
+  actionType: string,
+  characterLoadouts: Record<string, any>
+): { loadoutId: number | null; loadout: any | null } {
+  const dropdowns = detail.querySelectorAll('[class*="SkillActionDetail_loadoutDropdown"]');
+  if (!dropdowns.length) return { loadoutId: null, loadout: null };
+
+  let targetDropdown: Element | null = null;
+  for (const dd of dropdowns) {
+    const labelText = dd.querySelector('[class*="SkillActionDetail_label"]')?.textContent?.trim() || "";
+    if (/配装|loadout/i.test(labelText)) {
+      targetDropdown = dd;
+      break;
+    }
+  }
+  if (!targetDropdown) {
+    targetDropdown = dropdowns[dropdowns.length - 1];
+  }
+
+  const selectedName =
+    targetDropdown.querySelector('.MuiSelect-select')?.textContent?.trim() || "";
+  if (!selectedName) return { loadoutId: null, loadout: null };
+
+  for (const [idStr, ld] of Object.entries(characterLoadouts || {})) {
+    if (!ld || ld.name !== selectedName) continue;
+    if (actionType && ld.actionTypeHrid && ld.actionTypeHrid !== actionType) continue;
+    const numId = Number(idStr || ld.id);
+    if (Number.isFinite(numId) && numId > 0) {
+      return { loadoutId: numId, loadout: ld };
+    }
+  }
+  return { loadoutId: null, loadout: null };
+}
+
+export function parsePositiveActionCount(input: HTMLInputElement): number | null {
+  const raw = input.value.trim();
+  if (!raw || raw === "∞" || raw.toLowerCase() === "infinity") return null;
+  const n = Number(raw.replace(/[,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}

@@ -8,6 +8,31 @@ export interface MaterialLimitResult {
   readonly bottleneckHrid: string;
 }
 
+export interface MaterialRequirementEntry {
+  readonly itemHrid: string;
+  readonly enhancementLevel: number;
+  readonly isUpgradeItem: boolean;
+  readonly perAction: number;
+  readonly required: number;
+  readonly available: number;
+  readonly missing: number;
+}
+
+export interface MaterialRequirementsResult {
+  readonly targetCount: number;
+  readonly artisanSaving: number;
+  readonly items: readonly MaterialRequirementEntry[];
+}
+
+export interface ProductionMaterialInput {
+  readonly actionDetail: any;
+  readonly clientData: any;
+  readonly characterItems: readonly any[];
+  readonly drinkSlotsMap: ReadonlyMap<string, readonly any[]>;
+  readonly loadout: any | null;
+  readonly upgradeItemHash?: string;
+}
+
 export interface MaterialLimitInput {
   /** Action detail from `clientData.actionDetailMap` (uses `type`, `inputItems`, `upgradeItemHrid`). */
   readonly actionDetail: any;
@@ -245,4 +270,68 @@ export function computeMaterialLimit(input: MaterialLimitInput): MaterialLimitRe
 
   if (!Number.isFinite(limit)) return UNLIMITED;
   return { isInfinite: false, max: Math.max(0, limit), bottleneckHrid };
+}
+
+export function computeProductionMaterialRequirements(
+  input: ProductionMaterialInput,
+  targetCount: number
+): MaterialRequirementsResult {
+  if (!Number.isInteger(targetCount) || targetCount <= 0) {
+    return { targetCount: 0, artisanSaving: 0, items: [] };
+  }
+
+  const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, upgradeItemHash } = input;
+  if (!actionDetail || actionDetail.function !== "/action_functions/production") {
+    return { targetCount, artisanSaving: 0, items: [] };
+  }
+
+  const upgradeHrid: string = typeof actionDetail.upgradeItemHrid === "string" ? actionDetail.upgradeItemHrid : "";
+  const inputItems: readonly any[] = Array.isArray(actionDetail.inputItems) ? actionDetail.inputItems : [];
+  if (!upgradeHrid && inputItems.length === 0) {
+    return { targetCount, artisanSaving: 0, items: [] };
+  }
+
+  const inv = buildInventory(characterItems);
+  const drinks = resolveActionDrinks(actionDetail.type || "", loadout, drinkSlotsMap);
+  const artisanSaving = computeArtisanSaving(drinks, clientData, characterItems, loadout);
+  const items: MaterialRequirementEntry[] = [];
+
+  if (upgradeHrid) {
+    const selected = resolveStack(inv, upgradeItemHash);
+    const parsed = parseItemHash(upgradeItemHash);
+    const enhancementLevel = selected?.enhancementLevel ?? parsed?.enhancementLevel ?? 0;
+    const available = upgradeItemHash
+      ? selected?.count || 0
+      : inv.byKey.get(`${upgradeHrid}::0`) || 0;
+    const required = targetCount;
+    items.push({
+      itemHrid: upgradeHrid,
+      enhancementLevel,
+      isUpgradeItem: true,
+      perAction: 1,
+      required,
+      available,
+      missing: Math.max(0, required - available),
+    });
+  }
+
+  for (const inp of inputItems) {
+    const itemHrid = inp?.itemHrid;
+    const baseCount = Number(inp?.count) || 0;
+    if (!itemHrid || !(baseCount > 0)) continue;
+    const perAction = (1 - artisanSaving) * baseCount;
+    const required = Math.max(0, Math.ceil(perAction * targetCount - 1e-9));
+    const available = inv.byKey.get(`${itemHrid}::0`) || 0;
+    items.push({
+      itemHrid,
+      enhancementLevel: 0,
+      isUpgradeItem: false,
+      perAction,
+      required,
+      available,
+      missing: Math.max(0, required - available),
+    });
+  }
+
+  return { targetCount, artisanSaving, items };
 }
