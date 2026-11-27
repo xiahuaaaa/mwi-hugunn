@@ -12,7 +12,7 @@
 - **单观察器 + rAF 合并 + 面板路由门控（`src/core/dom-scheduler.ts`）**：全局只有 **1 个** `MutationObserver`，自动跳过插件自身 `[data-mwi-lite]` 节点避免循环，并在非当前面板时休眠对应业务模块。
 - **迷宫蒙特卡洛按需 Worker（`src/features/combat/labyrinth-rate.ts`）**：平时挂机创建 **0 个 Web Worker**；仅进入迷宫时按需启动 1 个真实蒙特卡洛 Worker + 500 条 LRU 结果缓存，离开迷宫 60 秒自动 `terminate()` 销毁。
 
-## 二、包含功能（18 个可独立开关模块）
+## 二、包含功能（20 个可独立开关模块）
 
 ### 市场与经济 (`market`)
 1. **市场快捷导航与强化档位跳转 (`market-shortcuts-nav`)**：
@@ -33,9 +33,11 @@
 
 ### 战斗与迷宫 (`combat`)
 10. **迷宫胜率与耗时模拟 (`combat-labyrinth-rate`)**：真实蒙特卡洛战斗模拟 + 生活/强化房胜率与含失败期望耗时、推层估算（按需 LazyWorker）。
-11. **战斗波次与轻量收益统计 (`combat-light-tracker`)**：战斗波次/场次、XP/h 与掉落估值（无 Chart.js）。
-12. **配装强化等级角标 (`combat-loadout-badge`)**：配装图标显示 `+N` 强化等级。
-13. **角色战斗评分 (`combat-score`)**：角色资料面板显示综合战力评分（战斗房屋 + 技能书 + 装备价值）。
+11. **迷宫推荐路线与斗篷助手 (`combat-labyrinth-helper`)**：整合自 `mwi-muninn`（移除一键开图与自动连排），提供 `1 点击 = 1 房间` 的推荐路线「排入下一个」与 `1 点击 = 1 个` 的「批量使用斗篷」选房逐个使用，自动迁移旧版 `mwi-muninn` 偏好配置。
+12. **战斗波次与轻量收益统计 (`combat-light-tracker`)**：战斗波次/场次、XP/h 与掉落估值（无 Chart.js）。
+13. **开箱运气与稀有度高亮 (`combat-chest-luck`)**：开箱时在原版弹窗内原位展示本次开箱运气分位、期望价值与地下城宝箱扣除钥匙净利，并按掉落稀有度高亮物品边框。
+14. **配装强化等级角标 (`combat-loadout-badge`)**：配装图标显示 `+N` 强化等级。
+15. **角色战斗评分 (`combat-score`)**：角色资料面板显示综合战力评分（战斗房屋 + 技能书 + 装备价值）。
 
 ## 三、开发与构建
 
@@ -73,5 +75,6 @@ npm run build
 | 市场交易量与 1/3/5 天均价 | [交易量显示](https://greasyfork.org/scripts/570243) & Q7 市场 API (`q7.nainai.eu.org`) | **`baozhi`**、`perfectpure`、感谢 **`Q7大厨神`** | **`CC-BY-NC-SA-4.0`** |
 | 战斗掉落运气值 CDF 与欧非统计 | [[银河奶牛]康康运气](https://greasyfork.org/scripts/536205) | **`Weierstras`**（及修复版贡献者） | `MIT` |
 | 任务/动作详情辅助设计参考 | [MWI_Toolkit](https://greasyfork.org/scripts/550483) | **`zqzhang1996`** | `MIT` |
+| 迷宫推荐路线规划与斗篷辅助 (`labyrinth-route-engine.ts`) | [MWI · Muninn](https://github.com/xiahuaaaa/mwi-muninn) | **`xiahuaaaa` / `adudu`** | 同作者整合 |
 
 > **合规声明**：任务面板中的所有游戏操作严格遵循 `1 click ≤ 1 server action`（工具栏 **领取下一个 / Claim Next** 每次点击仅领取 1 个就绪任务），绝不注入或伪造 `isTrusted` 事件或刻意绕过游戏防自动化检测。

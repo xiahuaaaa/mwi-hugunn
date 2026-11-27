@@ -1,5 +1,5 @@
 import { decompressFromUTF16 } from "./lz-utf16";
-import type { ActionTypeBuffSources, GameDataAPI } from "./types";
+import type { ActionTypeBuffSources, GameDataAPI, LabyrinthMeta } from "./types";
 import { wsBus } from "./ws-bus";
 
 function mergeMarketListings(currentListings: any[] = [], updatedListings: any[] = []): any[] {
@@ -49,6 +49,12 @@ class InMemoryGameData implements GameDataAPI {
   private characterLoadouts: Record<string, any> = {};
   private hasInitCharBuffs = false;
   private labyrinthData: any | null = null;
+  private labyrinthPathCap = 0;
+  private labyrinthMaxAttempts = 0;
+  private labyrinthFullAutoFloor = 0;
+  private labyrinthSkipThresholds: Record<string, number> = {};
+  private hasLabyrinthSetting = false;
+  private labyrinthRev = 0;
   private battleData: any | null = null;
   private listeners = new Map<string, Set<(data?: any) => void>>();
   private cachedCore: any | null = null;
@@ -105,7 +111,18 @@ class InMemoryGameData implements GameDataAPI {
       this.characterLoadouts = data.characterLoadoutMap || {};
       this.hasInitCharBuffs = true;
 
-      if (data.labyrinth) this.labyrinthData = data.labyrinth;
+      this.labyrinthData = data.labyrinth ?? null;
+      this.labyrinthPathCap = 0;
+      this.labyrinthMaxAttempts = 0;
+      this.labyrinthFullAutoFloor = 0;
+      this.labyrinthSkipThresholds = {};
+      this.hasLabyrinthSetting = false;
+      this.labyrinthRev++;
+      const cap = data.characterInfo?.labyrinthPathCap;
+      if (typeof cap === "number" && cap > 0) this.labyrinthPathCap = cap;
+      if (data.characterSetting) {
+        this.applyLabyrinthSetting(data.characterSetting);
+      }
 
       this.tryDecodeLocalInitClientData();
       this.emit("character_initialized", data);
@@ -284,8 +301,20 @@ class InMemoryGameData implements GameDataAPI {
     });
 
     wsBus.on("skills_updated", (data) => {
-      if (this.characterData && Array.isArray(data?.characterSkills)) {
-        this.characterSkills = data.characterSkills;
+      if (this.characterData) {
+        const delta = Array.isArray(data?.endCharacterSkills)
+          ? data.endCharacterSkills
+          : Array.isArray(data?.characterSkills)
+            ? data.characterSkills
+            : null;
+        if (delta && delta.length > 0) {
+          for (const sk of delta) {
+            if (!sk?.skillHrid) continue;
+            const idx = this.characterSkills.findIndex((s) => s.skillHrid === sk.skillHrid);
+            if (idx !== -1) this.characterSkills[idx] = { ...this.characterSkills[idx], ...sk };
+            else this.characterSkills.push(sk);
+          }
+        }
       }
       this.emit("skills_updated", data);
     });
@@ -304,12 +333,31 @@ class InMemoryGameData implements GameDataAPI {
       this.emit("quests_updated", data);
     });
 
-    wsBus.on("labyrinth_updated", (data) => {
-      if (data?.labyrinth) {
-        this.labyrinthData = data.labyrinth;
-      } else {
-        this.labyrinthData = data;
+    wsBus.on("character_info_updated", (data) => {
+      const cap = data?.characterInfo?.labyrinthPathCap;
+      if (typeof cap === "number" && cap > 0 && cap !== this.labyrinthPathCap) {
+        this.labyrinthPathCap = cap;
+        this.labyrinthRev++;
+        this.emit("labyrinth_updated", data);
       }
+    });
+
+    wsBus.on("setting_updated", (data) => {
+      const set = data?.characterSetting;
+      if (set) {
+        this.applyLabyrinthSetting(set);
+        this.labyrinthRev++;
+        this.emit("labyrinth_updated", data);
+      }
+    });
+
+    wsBus.on("labyrinth_updated", (data) => {
+      if (data && typeof data === "object" && "labyrinth" in data) {
+        this.labyrinthData = data.labyrinth ?? null;
+      } else {
+        this.labyrinthData = data ?? null;
+      }
+      this.labyrinthRev++;
       this.emit("labyrinth_updated", data);
     });
 
@@ -510,7 +558,67 @@ class InMemoryGameData implements GameDataAPI {
   }
 
   getLabyrinthData(): any | null {
+    const reactLab = this.getReactGameCore()?.state?.characterLabyrinth ?? null;
+    if (!this.labyrinthData) return reactLab;
+    if (reactLab && reactLab !== this.labyrinthData) {
+      const memTs = Date.parse(this.labyrinthData.updatedAt || "");
+      const reactTs = Date.parse(reactLab.updatedAt || "");
+      if (
+        (Number.isFinite(reactTs) && (!Number.isFinite(memTs) || reactTs > memTs)) ||
+        (reactLab.characterID && this.labyrinthData.characterID && reactLab.characterID !== this.labyrinthData.characterID)
+      ) {
+        this.labyrinthData = reactLab;
+        this.labyrinthRev++;
+      }
+    }
     return this.labyrinthData;
+  }
+
+  private extractSkipThresholds(setting: Record<string, any> | null | undefined): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (!setting || typeof setting !== "object") return out;
+    for (const [k, v] of Object.entries(setting)) {
+      if (!k.startsWith("labyrinthSkip") || typeof v !== "number" || !Number.isFinite(v)) continue;
+      const suffix = k.slice("labyrinthSkip".length);
+      if (!suffix) continue;
+      const snake = suffix
+        .replace(/([A-Z])/g, "_$1")
+        .replace(/^_/, "")
+        .toLowerCase();
+      if (snake) out[snake] = v;
+    }
+    return out;
+  }
+
+  private applyLabyrinthSetting(setting: Record<string, any>): void {
+    this.labyrinthMaxAttempts = setting.labyrinthMaxAttemptsPerRoom ?? 1;
+    this.labyrinthFullAutoFloor = setting.labyrinthFullAutoFloor || 0;
+    this.labyrinthSkipThresholds = this.extractSkipThresholds(setting);
+    this.hasLabyrinthSetting = true;
+  }
+
+  getLabyrinthMeta(): LabyrinthMeta {
+    const st = this.getReactGameCore()?.state;
+    const pathCap =
+      this.labyrinthPathCap > 0
+        ? this.labyrinthPathCap
+        : Number(st?.characterInfo?.labyrinthPathCap) || 3;
+    const maxAttempts = this.hasLabyrinthSetting
+      ? this.labyrinthMaxAttempts
+      : st?.characterSetting?.labyrinthMaxAttemptsPerRoom ?? 1;
+    const fullAutoFloor = this.hasLabyrinthSetting
+      ? this.labyrinthFullAutoFloor
+      : st?.characterSetting?.labyrinthFullAutoFloor || 0;
+    const skipThresholds = this.hasLabyrinthSetting
+      ? this.labyrinthSkipThresholds
+      : this.extractSkipThresholds(st?.characterSetting);
+    return {
+      pathCap,
+      maxAttempts,
+      fullAutoFloor,
+      skipThresholds,
+      rev: this.labyrinthRev,
+    };
   }
 
   getBattleData(): any | null {

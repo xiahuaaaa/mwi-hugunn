@@ -26,11 +26,13 @@ const SKIP_DEDUP_TYPES = new Set([
   "consumable_buffs_updated",
   "personal_buffs_updated",
   "character_info_updated",
+  "setting_updated",
   "labyrinth_updated",
   "labyrinth_room_progress",
   "new_battle",
   "battle_updated",
   "battle_unit_fetched",
+  "loot_opened",
 ]);
 
 class PassiveWsBus implements WsBus {

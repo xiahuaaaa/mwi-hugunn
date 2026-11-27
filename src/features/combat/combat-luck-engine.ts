@@ -136,14 +136,14 @@ export interface PlayerBattleAnalysis {
   hasMapModel: boolean;
 }
 
-const DUNGEON_ENTRY_KEYS: Record<string, string> = {
+export const DUNGEON_ENTRY_KEYS: Record<string, string> = {
   "/items/chimerical_chest": "/items/chimerical_entry_key",
   "/items/sinister_chest": "/items/sinister_entry_key",
   "/items/enchanted_chest": "/items/enchanted_entry_key",
   "/items/pirate_chest": "/items/pirate_entry_key",
 };
 
-const DUNGEON_CHEST_KEYS: Record<string, string> = {
+export const DUNGEON_CHEST_KEYS: Record<string, string> = {
   "/items/chimerical_chest": "/items/chimerical_chest_key",
   "/items/sinister_chest": "/items/sinister_chest_key",
   "/items/enchanted_chest": "/items/enchanted_chest_key",
@@ -154,7 +154,7 @@ const DUNGEON_CHEST_KEYS: Record<string, string> = {
   "/items/pirate_refinement_chest": "/items/pirate_chest_key",
 };
 
-const CHEST_COST_FALLBACKS: Record<string, { keyAsk: number; keyBid: number; entryAsk?: number; entryBid?: number }> = {
+export const CHEST_COST_FALLBACKS: Record<string, { keyAsk: number; keyBid: number; entryAsk?: number; entryBid?: number }> = {
   "/items/chimerical_chest": { keyAsk: 3600e3, keyBid: 3400e3, entryAsk: 210e3, entryBid: 190e3 },
   "/items/sinister_chest": { keyAsk: 6700e3, keyBid: 6400e3, entryAsk: 330e3, entryBid: 300e3 },
   "/items/enchanted_chest": { keyAsk: 8200e3, keyBid: 7800e3, entryAsk: 400e3, entryBid: 370e3 },
@@ -358,9 +358,9 @@ function getRoots(angleStep: number, samples: number): [Float64Array, Float64Arr
   return [cos, sin];
 }
 
-type CharaFunc = (samples: number, scale: number) => ComplexPair[];
+export type CharaFunc = (samples: number, scale: number) => ComplexPair[];
 
-function constantCF(x: number): CharaFunc {
+export function constantCF(x: number): CharaFunc {
   return (samples) => Array.from({ length: samples }, () => [x, 0] as ComplexPair);
 }
 
@@ -379,7 +379,7 @@ function mulCF(cf1: CharaFunc, cf2: CharaFunc): CharaFunc {
   };
 }
 
-function mulListCF(cfs: CharaFunc[]): CharaFunc {
+export function mulListCF(cfs: CharaFunc[]): CharaFunc {
   if (cfs.length === 0) return constantCF(1);
   if (cfs.length === 1) return cfs[0];
   return (samples, scale) => {
@@ -398,7 +398,7 @@ function mulListCF(cfs: CharaFunc[]): CharaFunc {
   };
 }
 
-function powCF(cf: CharaFunc, n: number): CharaFunc {
+export function powCF(cf: CharaFunc, n: number): CharaFunc {
   if (n === 1) return cf;
   if (n <= 0) return constantCF(1);
   return (samples, scale) => {
@@ -434,7 +434,7 @@ export function itemCountVar(item: { minCount: number; maxCount: number; dropRat
   return Math.max(0, dropRate * EX2() - ex * ex);
 }
 
-function dropItemCharaFunc(item: ItemDropModel): CharaFunc {
+export function dropItemCharaFunc(item: ItemDropModel): CharaFunc {
   const { minCount: l, maxCount: r, dropRate, price } = item;
   if (dropRate <= 0 || price <= 0 || r <= 0) {
     return constantCF(1);

@@ -90,6 +90,14 @@ export interface ActionTypeBuffSources {
   readonly equipmentTaskActionBuffs: any[];
 }
 
+export interface LabyrinthMeta {
+  readonly pathCap: number;
+  readonly maxAttempts: number;
+  readonly fullAutoFloor: number;
+  readonly skipThresholds: Readonly<Record<string, number>>;
+  readonly rev: number;
+}
+
 export interface GameDataAPI {
   init(): void;
   getClientData(): any | null;
@@ -110,6 +118,7 @@ export interface GameDataAPI {
   getActionTypeBuffSources(): ActionTypeBuffSources;
   getCharacterLoadouts(): Record<string, any>;
   getLabyrinthData(): any | null;
+  getLabyrinthMeta(): LabyrinthMeta;
   getBattleData(): any | null;
   getReactGameCore(forceRefresh?: boolean): any | null;
   on(event: string, handler: (data?: any) => void): () => void;
