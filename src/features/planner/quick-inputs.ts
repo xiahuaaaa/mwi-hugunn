@@ -33,7 +33,8 @@ function computeMaxCraftable(
   ctx: KernelContext,
   action: any,
   selectedLoadout: any | null,
-  lookup: LocalizedNameLookup
+  lookup: LocalizedNameLookup,
+  activeConsumableBuffs?: readonly any[]
 ): MaxCraftResult {
   const res = computeMaterialLimit({
     actionDetail: action,
@@ -41,6 +42,7 @@ function computeMaxCraftable(
     characterItems: ctx.gameData.getCharacterItems(),
     drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
     loadout: selectedLoadout,
+    activeConsumableBuffs,
   });
   return {
     isInfinite: res.isInfinite,
@@ -87,6 +89,7 @@ export function createQuickInputsModule(): FeatureModule {
 
     const characterLoadouts = ctx.gameData.getCharacterLoadouts();
     const { loadoutId, loadout } = findSelectedLoadout(detail, action?.type || "", characterLoadouts);
+    const buffSources = ctx.gameData.getActionTypeBuffSources();
 
     let effectiveSecPerCount = 0;
     if (!isCombat && actionHrid && clientData) {
@@ -99,7 +102,7 @@ export function createQuickInputsModule(): FeatureModule {
         actionIndex: loadoutId ? 1 : 0,
         currentActionLoadoutId: currentFirstLoadoutId,
         clientData,
-        buffSources: ctx.gameData.getActionTypeBuffSources(),
+        buffSources,
         characterSkills: ctx.gameData.getCharacterSkills(),
         characterItems: ctx.gameData.getCharacterItems(),
         characterQuests: ctx.gameData.getCharacterQuests(),
@@ -111,7 +114,7 @@ export function createQuickInputsModule(): FeatureModule {
 
     const maxResult =
       action && !isCombat && lookup
-        ? computeMaxCraftable(ctx, action, loadout, lookup)
+        ? computeMaxCraftable(ctx, action, loadout, lookup, buffSources.consumable?.[action.type || ""])
         : ({ isInfinite: true, max: Infinity, bottleneck: "" } satisfies MaxCraftResult);
 
     const sig = `${actionHrid}|${loadoutId ?? ""}|${effectiveSecPerCount.toFixed(3)}|${maxResult.isInfinite ? "inf" : maxResult.max}|${addMode ? 1 : 0}|${ctx.i18n.getLang()}`;

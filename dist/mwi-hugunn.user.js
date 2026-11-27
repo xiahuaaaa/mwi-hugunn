@@ -2,7 +2,7 @@
 // @name         MWI · Hugunn
 // @name:zh-CN   MWI · Hugunn
 // @namespace    https://milkywayidle.com/mwi-hugunn
-// @version      1.4.0
+// @version      1.4.1
 // @description  Tired of reinstalling a pile of laggy, mismatched scripts on every device? Fast! Lightweight! One script is all you need—come fight me if it's not! 15-in-1 MWI suite, zero deps & 100% read-only.
 // @description:zh-CN 受够了换设备就重装一堆卡顿又杂乱的脚本？快速！轻量！一个就够！不好用你来打我！15合1 MWI 聚合插件（市场/规划/迷宫/战斗），零依赖纯只读。
 // @author       adudu
@@ -898,6 +898,13 @@
       const core = this.getReactGameCore();
       if (core?.state?.actionTypeDrinkSlotsMap instanceof Map) {
         return core.state.actionTypeDrinkSlotsMap;
+      }
+      if (core?.state?.actionTypeDrinkSlotsDict && typeof core.state.actionTypeDrinkSlotsDict === "object") {
+        const map = /* @__PURE__ */ new Map();
+        for (const [k, v] of Object.entries(core.state.actionTypeDrinkSlotsDict)) {
+          map.set(k, Array.isArray(v) ? v : []);
+        }
+        return map;
       }
       return this.drinkSlotsMap;
     }
@@ -1877,7 +1884,7 @@
   }
 
   // src/core/version.ts
-  var HUGUNN_VERSION = true ? "1.4.0" : "dev";
+  var HUGUNN_VERSION = true ? "1.4.1" : "dev";
 
   // src/core/settings-ui.ts
   var SETTINGS_BTN_ID = "mwi-lite-settings-btn";
@@ -6525,7 +6532,12 @@
           handleQueueNextClick();
         });
       }
-      if (routeBtn.parentElement !== host) {
+      const buttonsGrid = host.querySelector(':scope > [class*="LabyrinthPanel_buttonsGrid"]');
+      if (buttonsGrid) {
+        if (routeBtn.nextElementSibling !== buttonsGrid) {
+          buttonsGrid.before(routeBtn);
+        }
+      } else if (routeBtn.parentElement !== host) {
         host.appendChild(routeBtn);
       }
       const busy = pending !== null;
@@ -6577,8 +6589,8 @@
           }
         });
       }
-      if (shroudBar.previousElementSibling !== supplyHost) {
-        supplyHost.after(shroudBar);
+      if (shroudBar.parentElement !== supplyHost || shroudBar.nextElementSibling !== null) {
+        supplyHost.appendChild(shroudBar);
       }
       const busy = pending !== null;
       const shroudBusy = pending?.kind === "shroud";
@@ -6594,10 +6606,10 @@
       } else {
         const useOff = picked === 0 || labState.shroud <= 0 || busy ? " disabled" : "";
         const ready = picked > 0 && labState.shroud > 0 && !busy ? ' data-ready="1"' : "";
-        const useLabel = shroudBusy ? ctx.i18n.t(`使用中… (${picked})`, `Using… (${picked})`) : ctx.i18n.t(`使用下一个斗篷 (${picked})`, `Use Next Shroud (${picked})`);
-        const useTitle = nextHint ? ctx.i18n.t(`点击对 ${nextHint} 使用 1 个斗篷（1 点击 = 1 个）`, `Click to shroud ${nextHint} (1 click = 1 shroud)`) : ctx.i18n.t("请先在地图上点选房间", "Click rooms on map first");
+        const useLabel = shroudBusy ? ctx.i18n.t(`使用中… (${picked})`, `Using… (${picked})`) : ctx.i18n.t(`使用下一个 (${picked})`, `Use Next (${picked})`);
         const tip = ctx.i18n.t(`点地图选房 (≤${labState.shroud})`, `Pick rooms (≤${labState.shroud})`);
-        shroudBar.innerHTML = `<button type="button" class="mwi-lh-sbtn"${ready} data-act="use-next" title="${escapeHtml2(useTitle)}"${useOff}>${escapeHtml2(useLabel)}</button><button type="button" class="mwi-lh-sbtn mwi-lh-sbtn-sub" data-act="cancel">${escapeHtml2(ctx.i18n.t("取消", "Cancel"))}</button><span class="mwi-lh-stip">${escapeHtml2(tip)}</span>`;
+        const useTitle = nextHint ? ctx.i18n.t(`点击对 ${nextHint} 使用 1 个斗篷（1 点击 = 1 个）· ${tip}`, `Click to shroud ${nextHint} (1 click = 1 shroud) · ${tip}`) : tip;
+        shroudBar.innerHTML = `<button type="button" class="mwi-lh-sbtn"${ready} data-act="use-next" title="${escapeHtml2(useTitle)}"${useOff}>${escapeHtml2(useLabel)}</button><button type="button" class="mwi-lh-sbtn mwi-lh-sbtn-sub" data-act="cancel">${escapeHtml2(ctx.i18n.t("取消", "Cancel"))}</button>`;
       }
     };
     const syncMapMarks = (labState, route) => {
@@ -6790,12 +6802,37 @@
           opacity: 0.52;
           cursor: not-allowed;
         }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) {
+          display: grid !important;
+          grid-template-columns: auto auto;
+          column-gap: 6px;
+          row-gap: 4px;
+          align-items: start;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > [class*="LabyrinthPanel_label"] {
+          grid-column: 1 / -1;
+          justify-self: center;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > .${ROUTE_BTN_CLASS} {
+          grid-column: 1;
+          grid-row: 2;
+          margin-top: 4px;
+          width: fit-content;
+          justify-self: end;
+          height: 30px;
+          align-self: start;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > [class*="LabyrinthPanel_buttonsGrid"] {
+          grid-column: 2;
+          grid-row: 2;
+        }
         .${SHROUD_BAR_CLASS} {
-          display: flex;
-          flex-wrap: wrap;
+          display: inline-flex;
+          flex-wrap: nowrap;
           align-items: center;
-          gap: 5px;
-          margin-top: 6px;
+          align-self: flex-end;
+          gap: 4px;
+          margin: 0 0 0 6px;
         }
         .${SHROUD_BAR_CLASS} .mwi-lh-sbtn {
           height: 24px;
@@ -6823,10 +6860,6 @@
         .${SHROUD_BAR_CLASS} .mwi-lh-sbtn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
-        }
-        .${SHROUD_BAR_CLASS} .mwi-lh-stip {
-          font: 11px/1.2 var(--mwi-px-mono, monospace);
-          color: var(--mwi-px-sub, #9dbbff);
         }
         [${ATTR_ROUTE_STEP}] {
           position: relative;
@@ -22867,11 +22900,15 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     };
     let conc = 0;
     if (loadout?.wearableMap && typeof loadout.wearableMap === "object") {
+      let hasLoadoutItem = false;
       for (const raw of Object.values(loadout.wearableMap)) {
         const parsed = parseItemHash(raw);
-        if (parsed) conc += statOf(parsed.itemHrid, parsed.enhancementLevel);
+        if (parsed) {
+          hasLoadoutItem = true;
+          conc += statOf(parsed.itemHrid, parsed.enhancementLevel);
+        }
       }
-      return 1 + Math.max(0, conc);
+      if (hasLoadoutItem) return 1 + Math.max(0, conc);
     }
     for (const item of characterItems) {
       if (!item?.itemHrid || !item.itemLocationHrid || item.itemLocationHrid === "/item_locations/inventory") {
@@ -22882,12 +22919,12 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     return 1 + Math.max(0, conc);
   }
   function resolveActionDrinks(actionType, loadout, drinkSlotsMap) {
-    if (loadout && Array.isArray(loadout.drinkItemHrids)) {
+    if (loadout && loadout.actionTypeHrid && Array.isArray(loadout.drinkItemHrids)) {
       return loadout.drinkItemHrids.filter((h) => typeof h === "string" && h.length > 0);
     }
     return (drinkSlotsMap.get(actionType) || []).map((d) => d?.itemHrid).filter(Boolean);
   }
-  function computeArtisanSaving(drinkHrids, clientData, characterItems, loadout) {
+  function computeArtisanSaving(drinkHrids, clientData, characterItems, loadout, activeConsumableBuffs) {
     const itemDetailMap = clientData?.itemDetailMap || {};
     let artisan = 0;
     for (const hrid of drinkHrids) {
@@ -22899,9 +22936,22 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         }
       }
     }
-    if (artisan <= 0) return 0;
-    const scale = computeDrinkConcentrationScale(clientData, characterItems, loadout);
-    return Math.min(0.99, artisan * scale);
+    if (artisan > 0) {
+      const scale = computeDrinkConcentrationScale(clientData, characterItems, loadout);
+      return Math.min(0.99, artisan * scale);
+    }
+    if (!(loadout && loadout.actionTypeHrid) && Array.isArray(activeConsumableBuffs)) {
+      let buffArtisan = 0;
+      for (const b of activeConsumableBuffs) {
+        if (b?.typeHrid === "/buff_types/artisan") {
+          buffArtisan += (Number(b.flatBoost) || 0) + (Number(b.ratioBoost) || 0);
+        }
+      }
+      if (buffArtisan > 0) {
+        return Math.min(0.99, buffArtisan);
+      }
+    }
+    return 0;
   }
   function buildInventory(characterItems) {
     const byKey = /* @__PURE__ */ new Map();
@@ -22938,7 +22988,15 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     return 0;
   }
   function computeMaterialLimit(input) {
-    const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, actionInstance } = input;
+    const {
+      actionDetail,
+      clientData,
+      characterItems,
+      drinkSlotsMap,
+      loadout,
+      actionInstance,
+      activeConsumableBuffs
+    } = input;
     if (!actionDetail) return UNLIMITED;
     const itemDetailMap = clientData?.itemDetailMap || {};
     const actionFunc = actionDetail.function || "";
@@ -22989,7 +23047,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     }
     if (costs.length > 0) {
       const drinks = resolveActionDrinks(actionDetail.type || "", loadout, drinkSlotsMap);
-      const artisan = isAlchemy || isEnhancing ? 0 : computeArtisanSaving(drinks, clientData, characterItems, loadout);
+      const artisan = isAlchemy || isEnhancing ? 0 : computeArtisanSaving(drinks, clientData, characterItems, loadout, activeConsumableBuffs);
       for (const c of costs) {
         const need = (1 - artisan) * c.count;
         if (!(need > 0)) continue;
@@ -23004,7 +23062,15 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     if (!Number.isInteger(targetCount) || targetCount <= 0) {
       return { targetCount: 0, artisanSaving: 0, items: [] };
     }
-    const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, upgradeItemHash } = input;
+    const {
+      actionDetail,
+      clientData,
+      characterItems,
+      drinkSlotsMap,
+      loadout,
+      upgradeItemHash,
+      activeConsumableBuffs
+    } = input;
     if (!actionDetail || actionDetail.function !== "/action_functions/production") {
       return { targetCount, artisanSaving: 0, items: [] };
     }
@@ -23015,7 +23081,13 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     }
     const inv = buildInventory(characterItems);
     const drinks = resolveActionDrinks(actionDetail.type || "", loadout, drinkSlotsMap);
-    const artisanSaving = computeArtisanSaving(drinks, clientData, characterItems, loadout);
+    const artisanSaving = computeArtisanSaving(
+      drinks,
+      clientData,
+      characterItems,
+      loadout,
+      activeConsumableBuffs
+    );
     const items = [];
     if (upgradeHrid) {
       const selected = resolveStack(inv, upgradeItemHash);
@@ -23375,7 +23447,8 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           characterItems,
           drinkSlotsMap,
           loadout,
-          actionInstance: action
+          actionInstance: action,
+          activeConsumableBuffs: buffSources.consumable?.[detail.type || ""]
         });
         materialLimitCache.set(key, res);
       }
@@ -24941,13 +25014,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     { label: "1K", value: 1e3 },
     { label: "10K", value: 1e4 }
   ];
-  function computeMaxCraftable(ctx, action, selectedLoadout, lookup) {
+  function computeMaxCraftable(ctx, action, selectedLoadout, lookup, activeConsumableBuffs) {
     const res = computeMaterialLimit({
       actionDetail: action,
       clientData: ctx.gameData.getClientData(),
       characterItems: ctx.gameData.getCharacterItems(),
       drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
-      loadout: selectedLoadout
+      loadout: selectedLoadout,
+      activeConsumableBuffs
     });
     return {
       isInfinite: res.isInfinite,
@@ -24986,6 +25060,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       const isCombat = resolved ? resolved.isCombat : Boolean(detail.closest('[class*="CombatPanel_combatPanel"]'));
       const characterLoadouts = ctx.gameData.getCharacterLoadouts();
       const { loadoutId, loadout } = findSelectedLoadout(detail, action?.type || "", characterLoadouts);
+      const buffSources = ctx.gameData.getActionTypeBuffSources();
       let effectiveSecPerCount = 0;
       if (!isCombat && actionHrid && clientData) {
         const currentActions = [...ctx.gameData.getCharacterActions()].sort(
@@ -24997,7 +25072,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           actionIndex: loadoutId ? 1 : 0,
           currentActionLoadoutId: currentFirstLoadoutId,
           clientData,
-          buffSources: ctx.gameData.getActionTypeBuffSources(),
+          buffSources,
           characterSkills: ctx.gameData.getCharacterSkills(),
           characterItems: ctx.gameData.getCharacterItems(),
           characterQuests: ctx.gameData.getCharacterQuests(),
@@ -25006,7 +25081,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         });
         effectiveSecPerCount = est.effectiveSecPerCount;
       }
-      const maxResult = action && !isCombat && lookup ? computeMaxCraftable(ctx, action, loadout, lookup) : { isInfinite: true, max: Infinity, bottleneck: "" };
+      const maxResult = action && !isCombat && lookup ? computeMaxCraftable(ctx, action, loadout, lookup, buffSources.consumable?.[action.type || ""]) : { isInfinite: true, max: Infinity, bottleneck: "" };
       const sig = `${actionHrid}|${loadoutId ?? ""}|${effectiveSecPerCount.toFixed(3)}|${maxResult.isInfinite ? "inf" : maxResult.max}|${addMode ? 1 : 0}|${ctx.i18n.getLang()}`;
       let container = detail.querySelector(`#${QUICK_INPUTS_ID}`);
       if (container && container.dataset.mwiSig === sig) {
@@ -25199,11 +25274,13 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
 
   // src/features/planner/required-materials.ts
   var BADGE_CLASS = "mwi-lite-req-mat";
-  var UPGRADE_BADGE_CLASS = "mwi-lite-req-mat-upgrade";
+  var COUNT_BADGE_CLASS = "mwi-lite-req-count";
+  var UPGRADE_BADGE_CLASS = "mwi-lite-req-upgrade";
+  var HIDDEN_ATTR = "data-mwi-req-hidden";
   function formatCompactOrExact(n) {
     const v = Math.max(0, Math.round(n));
     if (v >= 1e9) return `${(v / 1e9).toFixed(2).replace(/\.?0+$/, "")}B`;
-    if (v >= 1e7) return `${(v / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
     return v.toLocaleString("en-US");
   }
   function formatPerAction(n) {
@@ -25233,27 +25310,46 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     const level = Number(match[1]);
     return Number.isInteger(level) && level > 0 ? level : 0;
   }
-  function applyBadgeContent(el, entry, ctx) {
-    const reqFmt = formatCompactOrExact(entry.required);
-    const missFmt = formatCompactOrExact(entry.missing);
+  function buildTooltip(entry, targetCount, ctx) {
     const perFmt = formatPerAction(entry.perAction);
     const reqExact = entry.required.toLocaleString("en-US");
     const availExact = entry.available.toLocaleString("en-US");
     const missExact = entry.missing.toLocaleString("en-US");
-    if (entry.missing > 0) {
-      el.dataset.state = "miss";
-      el.textContent = ctx.i18n.t(`需 ${reqFmt} · 缺 ${missFmt}`, `Need ${reqFmt} · Miss ${missFmt}`);
-    } else {
-      el.dataset.state = "ok";
-      el.textContent = ctx.i18n.t(`需 ${reqFmt} · 充足`, `Need ${reqFmt} · OK`);
-    }
-    el.title = ctx.i18n.t(
-      `单次: ${perFmt} · 共需: ${reqExact} · 库存: ${availExact} · 缺口: ${missExact}`,
-      `Per craft: ${perFmt} · Total: ${reqExact} · Have: ${availExact} · Missing: ${missExact}`
+    return ctx.i18n.t(
+      `单次: ${perFmt} × ${targetCount} · 共需: ${reqExact} · 库存: ${availExact} · 缺口: ${missExact}`,
+      `Per craft: ${perFmt} × ${targetCount} · Total: ${reqExact} · Have: ${availExact} · Missing: ${missExact}`
     );
   }
-  function clearBadges(detail) {
-    detail.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+  function applyCountContent(el, entry, targetCount, ctx) {
+    const reqFmt = formatCompactOrExact(entry.required);
+    if (entry.missing > 0) {
+      const missFmt = formatCompactOrExact(entry.missing);
+      const missTag = ctx.i18n.t(`缺${missFmt}`, `-${missFmt}`);
+      el.dataset.state = "miss";
+      el.textContent = ` / ${reqFmt} (${missTag}) `;
+    } else {
+      el.dataset.state = "ok";
+      el.textContent = ` / ${reqFmt} `;
+    }
+    el.title = buildTooltip(entry, targetCount, ctx);
+  }
+  function applyUpgradeContent(el, entry, targetCount, ctx) {
+    const availFmt = formatCompactOrExact(entry.available);
+    const reqFmt = formatCompactOrExact(entry.required);
+    if (entry.missing > 0) {
+      const missFmt = formatCompactOrExact(entry.missing);
+      const missTag = ctx.i18n.t(`缺${missFmt}`, `-${missFmt}`);
+      el.dataset.state = "miss";
+      el.textContent = `${availFmt} / ${reqFmt} (${missTag})`;
+    } else {
+      el.dataset.state = "ok";
+      el.textContent = `${availFmt} / ${reqFmt}`;
+    }
+    el.title = buildTooltip(entry, targetCount, ctx);
+  }
+  function clearBadges(root) {
+    root.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+    root.querySelectorAll(`[${HIDDEN_ATTR}]`).forEach((el) => el.removeAttribute(HIDDEN_ATTR));
   }
   function createRequiredMaterialsModule() {
     let ctx = null;
@@ -25300,7 +25396,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       const action = resolved?.action || null;
       if (targetCount === null || !action || action.function !== "/action_functions/production") {
         const emptySig = `empty|${resolved?.actionHrid || ""}|${targetCount ?? "none"}`;
-        if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`)) {
+        if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`) || detail.querySelector(`[${HIDDEN_ATTR}]`)) {
           clearBadges(detail);
           detail.dataset.mwiReqSig = emptySig;
         }
@@ -25316,6 +25412,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       );
       const upgradeEnh = readSelectedUpgradeEnhancement(upgradeContainer);
       const upgradeItemHash = upgradeEnh > 0 && typeof action.upgradeItemHrid === "string" && action.upgradeItemHrid ? `::/item_locations/inventory::${action.upgradeItemHrid}::${upgradeEnh}` : void 0;
+      const buffSources = ctx.gameData.getActionTypeBuffSources();
       const result = computeProductionMaterialRequirements(
         {
           actionDetail: action,
@@ -25323,13 +25420,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           characterItems: ctx.gameData.getCharacterItems(),
           drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
           loadout,
-          upgradeItemHash
+          upgradeItemHash,
+          activeConsumableBuffs: buffSources.consumable?.[action.type || ""]
         },
         targetCount
       );
       if (result.items.length === 0) {
         const emptySig = `none|${resolved?.actionHrid || ""}|${targetCount}`;
-        if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`)) {
+        if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`) || detail.querySelector(`[${HIDDEN_ATTR}]`)) {
           clearBadges(detail);
           detail.dataset.mwiReqSig = emptySig;
         }
@@ -25338,23 +25436,31 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       const reqGrid = detail.querySelector('[class*="SkillActionDetail_itemRequirements"]');
       const regularEntries = result.items.filter((it) => !it.isUpgradeItem);
       const upgradeEntry = result.items.find((it) => it.isUpgradeItem) || null;
-      const itemCells = [];
+      const regularRows = [];
       if (reqGrid) {
-        const children = reqGrid.children;
+        const children = Array.from(reqGrid.children);
         for (let i = 0; i < children.length; i++) {
-          const cls = children[i].className;
-          if (typeof cls === "string" && cls.includes("SkillActionDetail_inputCount")) {
-            const next = children[i + 1];
-            if (next instanceof HTMLElement && !next.hasAttribute("data-mwi-lite")) {
-              itemCells.push(next);
+          const child = children[i];
+          if (!(child instanceof HTMLElement) || child.hasAttribute("data-mwi-lite")) continue;
+          if (typeof child.className === "string" && child.className.includes("SkillActionDetail_inputCount")) {
+            let j = i + 1;
+            while (j < children.length && children[j] instanceof HTMLElement && children[j].hasAttribute("data-mwi-lite")) {
+              j++;
+            }
+            const itemCell = children[j];
+            if (itemCell instanceof HTMLElement) {
+              regularRows.push({ inputEl: child, itemCell });
             }
           }
         }
       }
-      const expectedBadges = Math.min(itemCells.length, regularEntries.length) + (upgradeEntry && upgradeContainer ? 1 : 0);
-      const itemsSig = result.items.map((it) => `${it.itemHrid}:${it.enhancementLevel}:${it.required}:${it.available}:${it.missing}`).join(",");
+      const expectedRegular = Math.min(regularRows.length, regularEntries.length);
+      const expectedBadges = expectedRegular + (upgradeEntry && upgradeContainer ? 1 : 0);
+      const itemsSig = result.items.map(
+        (it) => `${it.itemHrid}:${it.enhancementLevel}:${it.perAction.toFixed(4)}:${it.required}:${it.available}:${it.missing}`
+      ).join(",");
       const sig = `${resolved?.actionHrid || ""}|${targetCount}|${loadoutId ?? ""}|${upgradeEnh}|${ctx.i18n.getLang()}|${itemsSig}`;
-      if (detail.dataset.mwiReqSig === sig && detail.querySelectorAll(`.${BADGE_CLASS}`).length === expectedBadges) {
+      if (detail.dataset.mwiReqSig === sig && detail.querySelectorAll(`.${BADGE_CLASS}`).length === expectedBadges && detail.querySelectorAll(`[${HIDDEN_ATTR}="1"]`).length === expectedRegular) {
         return;
       }
       detail.dataset.mwiReqSig = sig;
@@ -25364,23 +25470,36 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           regularByHrid.set(entry.itemHrid, entry);
         }
       }
-      for (let i = 0; i < itemCells.length; i++) {
-        const cell = itemCells[i];
-        const cellHrid = parseItemCellHrid(cell);
+      const activeInputs = /* @__PURE__ */ new Set();
+      const activeCountSpans = /* @__PURE__ */ new Set();
+      for (let i = 0; i < regularRows.length; i++) {
+        const { inputEl, itemCell } = regularRows[i];
+        const cellHrid = parseItemCellHrid(itemCell);
         const entry = (cellHrid ? regularByHrid.get(cellHrid) : void 0) || regularEntries[i];
-        let badge = cell.querySelector(`:scope > .${BADGE_CLASS}`);
+        const next = inputEl.nextElementSibling;
+        let span = next instanceof HTMLSpanElement && next.classList.contains(COUNT_BADGE_CLASS) ? next : null;
         if (!entry) {
-          badge?.remove();
+          inputEl.removeAttribute(HIDDEN_ATTR);
+          span?.remove();
           continue;
         }
-        if (!badge) {
-          badge = document.createElement("span");
-          badge.className = BADGE_CLASS;
-          badge.setAttribute("data-mwi-lite", "1");
-          cell.appendChild(badge);
+        inputEl.setAttribute(HIDDEN_ATTR, "1");
+        activeInputs.add(inputEl);
+        if (!span) {
+          span = document.createElement("span");
+          span.className = `${BADGE_CLASS} ${COUNT_BADGE_CLASS}`;
+          span.setAttribute("data-mwi-lite", "1");
+          inputEl.insertAdjacentElement("afterend", span);
         }
-        applyBadgeContent(badge, entry, ctx);
+        applyCountContent(span, entry, targetCount, ctx);
+        activeCountSpans.add(span);
       }
+      detail.querySelectorAll(`.${COUNT_BADGE_CLASS}`).forEach((el) => {
+        if (!activeCountSpans.has(el)) el.remove();
+      });
+      detail.querySelectorAll(`[${HIDDEN_ATTR}]`).forEach((el) => {
+        if (!activeInputs.has(el)) el.removeAttribute(HIDDEN_ATTR);
+      });
       if (upgradeContainer) {
         let badge = upgradeContainer.querySelector(`:scope > .${UPGRADE_BADGE_CLASS}`);
         if (!upgradeEntry) {
@@ -25392,7 +25511,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
             badge.setAttribute("data-mwi-lite", "1");
             upgradeContainer.appendChild(badge);
           }
-          applyBadgeContent(badge, upgradeEntry, ctx);
+          applyUpgradeContent(badge, upgradeEntry, targetCount, ctx);
         }
       }
     };
@@ -25420,23 +25539,23 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         const unregStyle = context.addStyle(
           "planner-required-materials-css",
           `
-        .${BADGE_CLASS} {
-          display: inline-block;
-          margin-left: 6px;
-          font-size: 11px;
-          line-height: 1.3;
-          font-weight: 700;
-          font-family: var(--mwi-px-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-          font-variant-numeric: tabular-nums;
-          white-space: nowrap;
-          vertical-align: middle;
-          cursor: help;
+        [${HIDDEN_ATTR}="1"] {
+          display: none !important;
         }
         .${BADGE_CLASS}[data-state="ok"] {
           color: var(--mwi-px-green, #4ade80);
         }
         .${BADGE_CLASS}[data-state="miss"] {
           color: #f87171;
+        }
+        .${COUNT_BADGE_CLASS} {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-start;
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+          cursor: help;
         }
         [class*="SkillActionDetail_upgradeItemSelectorInput"]:has(> .${UPGRADE_BADGE_CLASS}) {
           flex-wrap: wrap;
@@ -25445,8 +25564,14 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           display: block;
           flex: 1 0 100%;
           width: 100%;
-          margin-left: 0;
           margin-top: 3px;
+          font-size: 11px;
+          line-height: 1.3;
+          font-weight: 700;
+          font-family: var(--mwi-px-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+          cursor: help;
         }
         `
         );
@@ -25471,7 +25596,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
           abortController = null;
           unsubs.forEach((u) => u());
           unregStyle();
-          document.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+          clearBadges(document);
           document.querySelectorAll('[class*="SkillActionDetail_skillActionDetail"]').forEach((el) => {
             delete el.dataset.mwiReqSig;
           });

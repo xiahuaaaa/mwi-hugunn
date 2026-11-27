@@ -506,6 +506,13 @@ class InMemoryGameData implements GameDataAPI {
     if (core?.state?.actionTypeDrinkSlotsMap instanceof Map) {
       return core.state.actionTypeDrinkSlotsMap;
     }
+    if (core?.state?.actionTypeDrinkSlotsDict && typeof core.state.actionTypeDrinkSlotsDict === "object") {
+      const map = new Map<string, any[]>();
+      for (const [k, v] of Object.entries(core.state.actionTypeDrinkSlotsDict)) {
+        map.set(k, Array.isArray(v) ? v : []);
+      }
+      return map;
+    }
     return this.drinkSlotsMap;
   }
 

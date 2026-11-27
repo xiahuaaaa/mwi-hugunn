@@ -761,7 +761,12 @@ export function createLabyrinthHelperModule(): FeatureModule {
         handleQueueNextClick();
       });
     }
-    if (routeBtn.parentElement !== host) {
+    const buttonsGrid = host.querySelector<HTMLElement>(':scope > [class*="LabyrinthPanel_buttonsGrid"]');
+    if (buttonsGrid) {
+      if (routeBtn.nextElementSibling !== buttonsGrid) {
+        buttonsGrid.before(routeBtn);
+      }
+    } else if (routeBtn.parentElement !== host) {
       host.appendChild(routeBtn);
     }
 
@@ -827,8 +832,8 @@ export function createLabyrinthHelperModule(): FeatureModule {
         }
       });
     }
-    if (shroudBar.previousElementSibling !== supplyHost) {
-      supplyHost.after(shroudBar);
+    if (shroudBar.parentElement !== supplyHost || shroudBar.nextElementSibling !== null) {
+      supplyHost.appendChild(shroudBar);
     }
 
     const busy = pending !== null;
@@ -849,15 +854,14 @@ export function createLabyrinthHelperModule(): FeatureModule {
       const ready = picked > 0 && labState.shroud > 0 && !busy ? ' data-ready="1"' : "";
       const useLabel = shroudBusy
         ? ctx.i18n.t(`使用中… (${picked})`, `Using… (${picked})`)
-        : ctx.i18n.t(`使用下一个斗篷 (${picked})`, `Use Next Shroud (${picked})`);
-      const useTitle = nextHint
-        ? ctx.i18n.t(`点击对 ${nextHint} 使用 1 个斗篷（1 点击 = 1 个）`, `Click to shroud ${nextHint} (1 click = 1 shroud)`)
-        : ctx.i18n.t("请先在地图上点选房间", "Click rooms on map first");
+        : ctx.i18n.t(`使用下一个 (${picked})`, `Use Next (${picked})`);
       const tip = ctx.i18n.t(`点地图选房 (≤${labState.shroud})`, `Pick rooms (≤${labState.shroud})`);
+      const useTitle = nextHint
+        ? ctx.i18n.t(`点击对 ${nextHint} 使用 1 个斗篷（1 点击 = 1 个）· ${tip}`, `Click to shroud ${nextHint} (1 click = 1 shroud) · ${tip}`)
+        : tip;
       shroudBar.innerHTML =
         `<button type="button" class="mwi-lh-sbtn"${ready} data-act="use-next" title="${escapeHtml(useTitle)}"${useOff}>${escapeHtml(useLabel)}</button>` +
-        `<button type="button" class="mwi-lh-sbtn mwi-lh-sbtn-sub" data-act="cancel">${escapeHtml(ctx.i18n.t("取消", "Cancel"))}</button>` +
-        `<span class="mwi-lh-stip">${escapeHtml(tip)}</span>`;
+        `<button type="button" class="mwi-lh-sbtn mwi-lh-sbtn-sub" data-act="cancel">${escapeHtml(ctx.i18n.t("取消", "Cancel"))}</button>`;
     }
   };
 
@@ -1061,12 +1065,37 @@ export function createLabyrinthHelperModule(): FeatureModule {
           opacity: 0.52;
           cursor: not-allowed;
         }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) {
+          display: grid !important;
+          grid-template-columns: auto auto;
+          column-gap: 6px;
+          row-gap: 4px;
+          align-items: start;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > [class*="LabyrinthPanel_label"] {
+          grid-column: 1 / -1;
+          justify-self: center;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > .${ROUTE_BTN_CLASS} {
+          grid-column: 1;
+          grid-row: 2;
+          margin-top: 4px;
+          width: fit-content;
+          justify-self: end;
+          height: 30px;
+          align-self: start;
+        }
+        [class*="LabyrinthPanel_buttonsSection"]:has(> .${ROUTE_BTN_CLASS}) > [class*="LabyrinthPanel_buttonsGrid"] {
+          grid-column: 2;
+          grid-row: 2;
+        }
         .${SHROUD_BAR_CLASS} {
-          display: flex;
-          flex-wrap: wrap;
+          display: inline-flex;
+          flex-wrap: nowrap;
           align-items: center;
-          gap: 5px;
-          margin-top: 6px;
+          align-self: flex-end;
+          gap: 4px;
+          margin: 0 0 0 6px;
         }
         .${SHROUD_BAR_CLASS} .mwi-lh-sbtn {
           height: 24px;
@@ -1094,10 +1123,6 @@ export function createLabyrinthHelperModule(): FeatureModule {
         .${SHROUD_BAR_CLASS} .mwi-lh-sbtn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
-        }
-        .${SHROUD_BAR_CLASS} .mwi-lh-stip {
-          font: 11px/1.2 var(--mwi-px-mono, monospace);
-          color: var(--mwi-px-sub, #9dbbff);
         }
         [${ATTR_ROUTE_STEP}] {
           position: relative;

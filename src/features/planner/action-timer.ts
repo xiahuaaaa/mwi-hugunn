@@ -102,6 +102,7 @@ function buildActionEstimator(ctx: KernelContext, actions: readonly any[]) {
         drinkSlotsMap,
         loadout,
         actionInstance: action,
+        activeConsumableBuffs: buffSources.consumable?.[detail.type || ""],
       });
       materialLimitCache.set(key, res);
     }

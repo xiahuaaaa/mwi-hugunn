@@ -31,6 +31,7 @@ export interface ProductionMaterialInput {
   readonly drinkSlotsMap: ReadonlyMap<string, readonly any[]>;
   readonly loadout: any | null;
   readonly upgradeItemHash?: string;
+  readonly activeConsumableBuffs?: readonly any[];
 }
 
 export interface MaterialLimitInput {
@@ -46,6 +47,7 @@ export interface MaterialLimitInput {
    * enhancing, whose costs depend on the selected item rather than the action detail.
    */
   readonly actionInstance?: any;
+  readonly activeConsumableBuffs?: readonly any[];
 }
 
 const COIN_HRID = "/items/coin";
@@ -80,11 +82,15 @@ export function computeDrinkConcentrationScale(
 
   let conc = 0;
   if (loadout?.wearableMap && typeof loadout.wearableMap === "object") {
+    let hasLoadoutItem = false;
     for (const raw of Object.values(loadout.wearableMap)) {
       const parsed = parseItemHash(raw);
-      if (parsed) conc += statOf(parsed.itemHrid, parsed.enhancementLevel);
+      if (parsed) {
+        hasLoadoutItem = true;
+        conc += statOf(parsed.itemHrid, parsed.enhancementLevel);
+      }
     }
-    return 1 + Math.max(0, conc);
+    if (hasLoadoutItem) return 1 + Math.max(0, conc);
   }
 
   for (const item of characterItems) {
@@ -102,7 +108,7 @@ export function resolveActionDrinks(
   loadout: any | null,
   drinkSlotsMap: ReadonlyMap<string, readonly any[]>
 ): string[] {
-  if (loadout && Array.isArray(loadout.drinkItemHrids)) {
+  if (loadout && loadout.actionTypeHrid && Array.isArray(loadout.drinkItemHrids)) {
     return loadout.drinkItemHrids.filter((h: unknown): h is string => typeof h === "string" && h.length > 0);
   }
   return (drinkSlotsMap.get(actionType) || []).map((d: any) => d?.itemHrid).filter(Boolean);
@@ -113,7 +119,8 @@ export function computeArtisanSaving(
   drinkHrids: readonly string[],
   clientData: any,
   characterItems: readonly any[],
-  loadout: any | null
+  loadout: any | null,
+  activeConsumableBuffs?: readonly any[]
 ): number {
   const itemDetailMap = clientData?.itemDetailMap || {};
   let artisan = 0;
@@ -126,12 +133,24 @@ export function computeArtisanSaving(
       }
     }
   }
-  if (artisan <= 0) return 0;
-  const scale = computeDrinkConcentrationScale(clientData, characterItems, loadout);
-  return Math.min(0.99, artisan * scale);
+  if (artisan > 0) {
+    const scale = computeDrinkConcentrationScale(clientData, characterItems, loadout);
+    return Math.min(0.99, artisan * scale);
+  }
+  if (!(loadout && loadout.actionTypeHrid) && Array.isArray(activeConsumableBuffs)) {
+    let buffArtisan = 0;
+    for (const b of activeConsumableBuffs) {
+      if (b?.typeHrid === "/buff_types/artisan") {
+        buffArtisan += (Number(b.flatBoost) || 0) + (Number(b.ratioBoost) || 0);
+      }
+    }
+    if (buffArtisan > 0) {
+      return Math.min(0.99, buffArtisan);
+    }
+  }
+  return 0;
 }
 
-/** Max runs allowed by inventory materials (inputs reduced by Artisan; upgrade base item at +0). */
 interface CostEntry {
   readonly itemHrid: string;
   readonly enhancementLevel: number;
@@ -196,7 +215,15 @@ export function getAlchemyCoinCost(actionHrid: string, itemLevel: number, sellPr
  * - enhancing: the selected item's `enhancementCosts` (skipped when `enhancingMaxLevel > 0`, where stopping is target-level driven).
  */
 export function computeMaterialLimit(input: MaterialLimitInput): MaterialLimitResult {
-  const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, actionInstance } = input;
+  const {
+    actionDetail,
+    clientData,
+    characterItems,
+    drinkSlotsMap,
+    loadout,
+    actionInstance,
+    activeConsumableBuffs,
+  } = input;
   if (!actionDetail) return UNLIMITED;
   const itemDetailMap = clientData?.itemDetailMap || {};
   const actionFunc: string = actionDetail.function || "";
@@ -259,7 +286,7 @@ export function computeMaterialLimit(input: MaterialLimitInput): MaterialLimitRe
     const artisan =
       isAlchemy || isEnhancing
         ? 0
-        : computeArtisanSaving(drinks, clientData, characterItems, loadout);
+        : computeArtisanSaving(drinks, clientData, characterItems, loadout, activeConsumableBuffs);
     for (const c of costs) {
       const need = (1 - artisan) * c.count;
       if (!(need > 0)) continue;
@@ -280,7 +307,15 @@ export function computeProductionMaterialRequirements(
     return { targetCount: 0, artisanSaving: 0, items: [] };
   }
 
-  const { actionDetail, clientData, characterItems, drinkSlotsMap, loadout, upgradeItemHash } = input;
+  const {
+    actionDetail,
+    clientData,
+    characterItems,
+    drinkSlotsMap,
+    loadout,
+    upgradeItemHash,
+    activeConsumableBuffs,
+  } = input;
   if (!actionDetail || actionDetail.function !== "/action_functions/production") {
     return { targetCount, artisanSaving: 0, items: [] };
   }
@@ -293,7 +328,13 @@ export function computeProductionMaterialRequirements(
 
   const inv = buildInventory(characterItems);
   const drinks = resolveActionDrinks(actionDetail.type || "", loadout, drinkSlotsMap);
-  const artisanSaving = computeArtisanSaving(drinks, clientData, characterItems, loadout);
+  const artisanSaving = computeArtisanSaving(
+    drinks,
+    clientData,
+    characterItems,
+    loadout,
+    activeConsumableBuffs
+  );
   const items: MaterialRequirementEntry[] = [];
 
   if (upgradeHrid) {

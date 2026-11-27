@@ -9,12 +9,19 @@ import {
 } from "./planner-utils";
 
 const BADGE_CLASS = "mwi-lite-req-mat";
-const UPGRADE_BADGE_CLASS = "mwi-lite-req-mat-upgrade";
+const COUNT_BADGE_CLASS = "mwi-lite-req-count";
+const UPGRADE_BADGE_CLASS = "mwi-lite-req-upgrade";
+const HIDDEN_ATTR = "data-mwi-req-hidden";
+
+interface RegularRow {
+  readonly inputEl: HTMLElement;
+  readonly itemCell: HTMLElement;
+}
 
 function formatCompactOrExact(n: number): string {
   const v = Math.max(0, Math.round(n));
   if (v >= 1e9) return `${(v / 1e9).toFixed(2).replace(/\.?0+$/, "")}B`;
-  if (v >= 1e7) return `${(v / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
   return v.toLocaleString("en-US");
 }
 
@@ -48,34 +55,59 @@ function readSelectedUpgradeEnhancement(upgradeContainer: Element | null): numbe
   return Number.isInteger(level) && level > 0 ? level : 0;
 }
 
-function applyBadgeContent(
-  el: HTMLElement,
-  entry: MaterialRequirementEntry,
-  ctx: KernelContext
-): void {
-  const reqFmt = formatCompactOrExact(entry.required);
-  const missFmt = formatCompactOrExact(entry.missing);
+function buildTooltip(entry: MaterialRequirementEntry, targetCount: number, ctx: KernelContext): string {
   const perFmt = formatPerAction(entry.perAction);
   const reqExact = entry.required.toLocaleString("en-US");
   const availExact = entry.available.toLocaleString("en-US");
   const missExact = entry.missing.toLocaleString("en-US");
-
-  if (entry.missing > 0) {
-    el.dataset.state = "miss";
-    el.textContent = ctx.i18n.t(`需 ${reqFmt} · 缺 ${missFmt}`, `Need ${reqFmt} · Miss ${missFmt}`);
-  } else {
-    el.dataset.state = "ok";
-    el.textContent = ctx.i18n.t(`需 ${reqFmt} · 充足`, `Need ${reqFmt} · OK`);
-  }
-
-  el.title = ctx.i18n.t(
-    `单次: ${perFmt} · 共需: ${reqExact} · 库存: ${availExact} · 缺口: ${missExact}`,
-    `Per craft: ${perFmt} · Total: ${reqExact} · Have: ${availExact} · Missing: ${missExact}`
+  return ctx.i18n.t(
+    `单次: ${perFmt} × ${targetCount} · 共需: ${reqExact} · 库存: ${availExact} · 缺口: ${missExact}`,
+    `Per craft: ${perFmt} × ${targetCount} · Total: ${reqExact} · Have: ${availExact} · Missing: ${missExact}`
   );
 }
 
-function clearBadges(detail: HTMLElement): void {
-  detail.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+function applyCountContent(
+  el: HTMLElement,
+  entry: MaterialRequirementEntry,
+  targetCount: number,
+  ctx: KernelContext
+): void {
+  const reqFmt = formatCompactOrExact(entry.required);
+  if (entry.missing > 0) {
+    const missFmt = formatCompactOrExact(entry.missing);
+    const missTag = ctx.i18n.t(`缺${missFmt}`, `-${missFmt}`);
+    el.dataset.state = "miss";
+    el.textContent = `\u00a0/ ${reqFmt} (${missTag})\u00a0`;
+  } else {
+    el.dataset.state = "ok";
+    el.textContent = `\u00a0/ ${reqFmt}\u00a0`;
+  }
+  el.title = buildTooltip(entry, targetCount, ctx);
+}
+
+function applyUpgradeContent(
+  el: HTMLElement,
+  entry: MaterialRequirementEntry,
+  targetCount: number,
+  ctx: KernelContext
+): void {
+  const availFmt = formatCompactOrExact(entry.available);
+  const reqFmt = formatCompactOrExact(entry.required);
+  if (entry.missing > 0) {
+    const missFmt = formatCompactOrExact(entry.missing);
+    const missTag = ctx.i18n.t(`缺${missFmt}`, `-${missFmt}`);
+    el.dataset.state = "miss";
+    el.textContent = `${availFmt} / ${reqFmt} (${missTag})`;
+  } else {
+    el.dataset.state = "ok";
+    el.textContent = `${availFmt} / ${reqFmt}`;
+  }
+  el.title = buildTooltip(entry, targetCount, ctx);
+}
+
+function clearBadges(root: ParentNode): void {
+  root.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+  root.querySelectorAll(`[${HIDDEN_ATTR}]`).forEach((el) => el.removeAttribute(HIDDEN_ATTR));
 }
 
 export function createRequiredMaterialsModule(): FeatureModule {
@@ -129,7 +161,11 @@ export function createRequiredMaterialsModule(): FeatureModule {
 
     if (targetCount === null || !action || action.function !== "/action_functions/production") {
       const emptySig = `empty|${resolved?.actionHrid || ""}|${targetCount ?? "none"}`;
-      if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`)) {
+      if (
+        detail.dataset.mwiReqSig !== emptySig ||
+        detail.querySelector(`.${BADGE_CLASS}`) ||
+        detail.querySelector(`[${HIDDEN_ATTR}]`)
+      ) {
         clearBadges(detail);
         detail.dataset.mwiReqSig = emptySig;
       }
@@ -149,6 +185,7 @@ export function createRequiredMaterialsModule(): FeatureModule {
       upgradeEnh > 0 && typeof action.upgradeItemHrid === "string" && action.upgradeItemHrid
         ? `::/item_locations/inventory::${action.upgradeItemHrid}::${upgradeEnh}`
         : undefined;
+    const buffSources = ctx.gameData.getActionTypeBuffSources();
 
     const result = computeProductionMaterialRequirements(
       {
@@ -158,13 +195,18 @@ export function createRequiredMaterialsModule(): FeatureModule {
         drinkSlotsMap: ctx.gameData.getActionTypeDrinkSlots(),
         loadout,
         upgradeItemHash,
+        activeConsumableBuffs: buffSources.consumable?.[action.type || ""],
       },
       targetCount
     );
 
     if (result.items.length === 0) {
       const emptySig = `none|${resolved?.actionHrid || ""}|${targetCount}`;
-      if (detail.dataset.mwiReqSig !== emptySig || detail.querySelector(`.${BADGE_CLASS}`)) {
+      if (
+        detail.dataset.mwiReqSig !== emptySig ||
+        detail.querySelector(`.${BADGE_CLASS}`) ||
+        detail.querySelector(`[${HIDDEN_ATTR}]`)
+      ) {
         clearBadges(detail);
         detail.dataset.mwiReqSig = emptySig;
       }
@@ -175,30 +217,43 @@ export function createRequiredMaterialsModule(): FeatureModule {
     const regularEntries = result.items.filter((it) => !it.isUpgradeItem);
     const upgradeEntry = result.items.find((it) => it.isUpgradeItem) || null;
 
-    const itemCells: HTMLElement[] = [];
+    const regularRows: RegularRow[] = [];
     if (reqGrid) {
-      const children = reqGrid.children;
+      const children = Array.from(reqGrid.children);
       for (let i = 0; i < children.length; i++) {
-        const cls = children[i].className;
-        if (typeof cls === "string" && cls.includes("SkillActionDetail_inputCount")) {
-          const next = children[i + 1];
-          if (next instanceof HTMLElement && !next.hasAttribute("data-mwi-lite")) {
-            itemCells.push(next);
+        const child = children[i];
+        if (!(child instanceof HTMLElement) || child.hasAttribute("data-mwi-lite")) continue;
+        if (typeof child.className === "string" && child.className.includes("SkillActionDetail_inputCount")) {
+          let j = i + 1;
+          while (
+            j < children.length &&
+            children[j] instanceof HTMLElement &&
+            children[j].hasAttribute("data-mwi-lite")
+          ) {
+            j++;
+          }
+          const itemCell = children[j];
+          if (itemCell instanceof HTMLElement) {
+            regularRows.push({ inputEl: child, itemCell });
           }
         }
       }
     }
 
-    const expectedBadges =
-      Math.min(itemCells.length, regularEntries.length) + (upgradeEntry && upgradeContainer ? 1 : 0);
+    const expectedRegular = Math.min(regularRows.length, regularEntries.length);
+    const expectedBadges = expectedRegular + (upgradeEntry && upgradeContainer ? 1 : 0);
     const itemsSig = result.items
-      .map((it) => `${it.itemHrid}:${it.enhancementLevel}:${it.required}:${it.available}:${it.missing}`)
+      .map(
+        (it) =>
+          `${it.itemHrid}:${it.enhancementLevel}:${it.perAction.toFixed(4)}:${it.required}:${it.available}:${it.missing}`
+      )
       .join(",");
     const sig = `${resolved?.actionHrid || ""}|${targetCount}|${loadoutId ?? ""}|${upgradeEnh}|${ctx.i18n.getLang()}|${itemsSig}`;
 
     if (
       detail.dataset.mwiReqSig === sig &&
-      detail.querySelectorAll(`.${BADGE_CLASS}`).length === expectedBadges
+      detail.querySelectorAll(`.${BADGE_CLASS}`).length === expectedBadges &&
+      detail.querySelectorAll(`[${HIDDEN_ATTR}="1"]`).length === expectedRegular
     ) {
       return;
     }
@@ -211,23 +266,41 @@ export function createRequiredMaterialsModule(): FeatureModule {
       }
     }
 
-    for (let i = 0; i < itemCells.length; i++) {
-      const cell = itemCells[i];
-      const cellHrid = parseItemCellHrid(cell);
+    const activeInputs = new Set<Element>();
+    const activeCountSpans = new Set<Element>();
+
+    for (let i = 0; i < regularRows.length; i++) {
+      const { inputEl, itemCell } = regularRows[i];
+      const cellHrid = parseItemCellHrid(itemCell);
       const entry = (cellHrid ? regularByHrid.get(cellHrid) : undefined) || regularEntries[i];
-      let badge = cell.querySelector<HTMLSpanElement>(`:scope > .${BADGE_CLASS}`);
+      const next = inputEl.nextElementSibling;
+      let span =
+        next instanceof HTMLSpanElement && next.classList.contains(COUNT_BADGE_CLASS) ? next : null;
+
       if (!entry) {
-        badge?.remove();
+        inputEl.removeAttribute(HIDDEN_ATTR);
+        span?.remove();
         continue;
       }
-      if (!badge) {
-        badge = document.createElement("span");
-        badge.className = BADGE_CLASS;
-        badge.setAttribute("data-mwi-lite", "1");
-        cell.appendChild(badge);
+
+      inputEl.setAttribute(HIDDEN_ATTR, "1");
+      activeInputs.add(inputEl);
+      if (!span) {
+        span = document.createElement("span");
+        span.className = `${BADGE_CLASS} ${COUNT_BADGE_CLASS}`;
+        span.setAttribute("data-mwi-lite", "1");
+        inputEl.insertAdjacentElement("afterend", span);
       }
-      applyBadgeContent(badge, entry, ctx);
+      applyCountContent(span, entry, targetCount, ctx);
+      activeCountSpans.add(span);
     }
+
+    detail.querySelectorAll(`.${COUNT_BADGE_CLASS}`).forEach((el) => {
+      if (!activeCountSpans.has(el)) el.remove();
+    });
+    detail.querySelectorAll(`[${HIDDEN_ATTR}]`).forEach((el) => {
+      if (!activeInputs.has(el)) el.removeAttribute(HIDDEN_ATTR);
+    });
 
     if (upgradeContainer) {
       let badge = upgradeContainer.querySelector<HTMLDivElement>(`:scope > .${UPGRADE_BADGE_CLASS}`);
@@ -240,7 +313,7 @@ export function createRequiredMaterialsModule(): FeatureModule {
           badge.setAttribute("data-mwi-lite", "1");
           upgradeContainer.appendChild(badge);
         }
-        applyBadgeContent(badge, upgradeEntry, ctx);
+        applyUpgradeContent(badge, upgradeEntry, targetCount, ctx);
       }
     }
   };
@@ -274,23 +347,23 @@ export function createRequiredMaterialsModule(): FeatureModule {
       const unregStyle = context.addStyle(
         "planner-required-materials-css",
         `
-        .${BADGE_CLASS} {
-          display: inline-block;
-          margin-left: 6px;
-          font-size: 11px;
-          line-height: 1.3;
-          font-weight: 700;
-          font-family: var(--mwi-px-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-          font-variant-numeric: tabular-nums;
-          white-space: nowrap;
-          vertical-align: middle;
-          cursor: help;
+        [${HIDDEN_ATTR}="1"] {
+          display: none !important;
         }
         .${BADGE_CLASS}[data-state="ok"] {
           color: var(--mwi-px-green, #4ade80);
         }
         .${BADGE_CLASS}[data-state="miss"] {
           color: #f87171;
+        }
+        .${COUNT_BADGE_CLASS} {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-start;
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+          cursor: help;
         }
         [class*="SkillActionDetail_upgradeItemSelectorInput"]:has(> .${UPGRADE_BADGE_CLASS}) {
           flex-wrap: wrap;
@@ -299,8 +372,14 @@ export function createRequiredMaterialsModule(): FeatureModule {
           display: block;
           flex: 1 0 100%;
           width: 100%;
-          margin-left: 0;
           margin-top: 3px;
+          font-size: 11px;
+          line-height: 1.3;
+          font-weight: 700;
+          font-family: var(--mwi-px-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+          cursor: help;
         }
         `
       );
@@ -327,7 +406,7 @@ export function createRequiredMaterialsModule(): FeatureModule {
         abortController = null;
         unsubs.forEach((u) => u());
         unregStyle();
-        document.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
+        clearBadges(document);
         document
           .querySelectorAll<HTMLElement>('[class*="SkillActionDetail_skillActionDetail"]')
           .forEach((el) => {
