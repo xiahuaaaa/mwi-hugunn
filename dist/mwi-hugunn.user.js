@@ -2,7 +2,7 @@
 // @name         MWI · Hugunn
 // @name:zh-CN   MWI · Hugunn
 // @namespace    https://milkywayidle.com/mwi-hugunn
-// @version      1.5.0
+// @version      1.6.0
 // @description  Tired of reinstalling a pile of laggy, mismatched scripts on every device? Fast! Lightweight! One script is all you need—come fight me if it's not! 15-in-1 MWI suite, zero deps & 100% read-only.
 // @description:zh-CN 受够了换设备就重装一堆卡顿又杂乱的脚本？快速！轻量！一个就够！不好用你来打我！15合1 MWI 聚合插件（市场/规划/迷宫/战斗），零依赖纯只读。
 // @author       adudu
@@ -1884,7 +1884,7 @@
   }
 
   // src/core/version.ts
-  var HUGUNN_VERSION = true ? "1.5.0" : "dev";
+  var HUGUNN_VERSION = true ? "1.6.0" : "dev";
 
   // src/core/settings-ui.ts
   var SETTINGS_BTN_ID = "mwi-lite-settings-btn";
@@ -21021,6 +21021,436 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     };
   }
 
+  // src/features/market/market-list-nav-engine.ts
+  var ITEM_HRID_RE = /^\/items\/[a-z0-9_]+$/;
+  var MIN_ENHANCEMENT_LEVEL = 0;
+  var MAX_ENHANCEMENT_LEVEL = 20;
+  function normalizeMarketList(hrids) {
+    const seen = /* @__PURE__ */ new Set();
+    const normalized = [];
+    for (let i = 0; i < hrids.length; i++) {
+      const raw = hrids[i];
+      if (typeof raw !== "string") continue;
+      const hrid = raw.trim();
+      if (!ITEM_HRID_RE.test(hrid) || seen.has(hrid)) continue;
+      seen.add(hrid);
+      normalized.push(hrid);
+    }
+    return normalized;
+  }
+  function resolveTargetLevel(targetItemHrid, currentLevel, isEnhanceable) {
+    if (!isEnhanceable(targetItemHrid)) return MIN_ENHANCEMENT_LEVEL;
+    if (currentLevel === null) return null;
+    if (!Number.isFinite(currentLevel)) return MIN_ENHANCEMENT_LEVEL;
+    return Math.max(MIN_ENHANCEMENT_LEVEL, Math.min(MAX_ENHANCEMENT_LEVEL, Math.trunc(currentLevel)));
+  }
+  function resolveMarketListNavState(list, currentItemHrid, currentLevel, isEnhanceable) {
+    const index = list.indexOf(currentItemHrid);
+    if (index < 0) {
+      return {
+        visible: false,
+        index: -1,
+        total: list.length,
+        prev: null,
+        next: null
+      };
+    }
+    const prevHrid = index > 0 ? list[index - 1] : null;
+    const nextHrid = index < list.length - 1 ? list[index + 1] : null;
+    return {
+      visible: true,
+      index,
+      total: list.length,
+      prev: prevHrid ? {
+        itemHrid: prevHrid,
+        level: resolveTargetLevel(prevHrid, currentLevel, isEnhanceable)
+      } : null,
+      next: nextHrid ? {
+        itemHrid: nextHrid,
+        level: resolveTargetLevel(nextHrid, currentLevel, isEnhanceable)
+      } : null
+    };
+  }
+
+  // src/features/market/market-list-nav.ts
+  var MARKET_LIST_NAV_MODULE_ID = "market-list-nav";
+  var NAV_BAR_ID = "mwi-lite-market-list-nav";
+  function isElementVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const htmlEl = el;
+    return htmlEl.style.display !== "none" && !htmlEl.hidden && htmlEl.offsetParent !== null;
+  }
+  function findVisibleMarketPanel() {
+    const panels = document.querySelectorAll('[class*="MarketplacePanel_marketplacePanel"]');
+    for (let i = 0; i < panels.length; i++) {
+      if (isElementVisible(panels[i])) return panels[i];
+    }
+    return null;
+  }
+  function extractItemHrid(root) {
+    const uses = root.querySelectorAll("use");
+    let fallback = null;
+    for (let i = 0; i < uses.length; i++) {
+      const useEl = uses[i];
+      if (useEl.closest("[data-mwi-lite]")) continue;
+      const href = useEl.getAttribute("href") || useEl.getAttribute("xlink:href") || useEl.href?.baseVal || "";
+      const hashIndex = href.indexOf("#");
+      if (hashIndex < 0) continue;
+      const slug = href.slice(hashIndex + 1).trim();
+      if (!slug) continue;
+      const hrid = `/items/${slug}`;
+      if (href.includes("items_sprite")) return hrid;
+      if (fallback === null) fallback = hrid;
+    }
+    return fallback;
+  }
+  function findVisibleCurrentItem(panel) {
+    const nodes = panel.querySelectorAll('[class*="MarketplacePanel_currentItem"]');
+    for (let i = 0; i < nodes.length; i++) {
+      const cur = nodes[i];
+      if (!isElementVisible(cur)) continue;
+      const itemHrid = extractItemHrid(cur);
+      if (!itemHrid) continue;
+      const enhEl = cur.querySelector('[class*="Item_enhancementLevel"]');
+      const level = enhEl ? Number((enhEl.textContent || "").replace(/\+/g, "").trim()) || 0 : 0;
+      return { el: cur, itemHrid, level };
+    }
+    return null;
+  }
+  function findActiveMarketItemsContainer(itemSelection) {
+    for (let i = 0; i < itemSelection.children.length; i++) {
+      const child = itemSelection.children[i];
+      if (child.hasAttribute("data-mwi-lite")) continue;
+      if (child.matches('[class*="MarketplacePanel_marketItems"]')) {
+        return child;
+      }
+    }
+    const tabsContainer = itemSelection.querySelector(
+      '[class*="MarketplacePanel_itemSelectionTabsContainer"]:not([class*="MarketplacePanel_hide"])'
+    );
+    if (!tabsContainer) return null;
+    const candidates = tabsContainer.querySelectorAll('[class*="MarketplacePanel_marketItems"]');
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      if (candidate.closest("[data-mwi-lite]")) continue;
+      if (candidate.hidden || candidate.style.display === "none") continue;
+      const hiddenAncestor = candidate.closest(
+        '[class*="TabPanel_hidden"], [class*="MarketplacePanel_hide"], [hidden]'
+      );
+      if (hiddenAncestor && tabsContainer.contains(hiddenAncestor)) continue;
+      return candidate;
+    }
+    return null;
+  }
+  function isHiddenWithin(node, boundary) {
+    let cur = node;
+    while (cur && cur !== boundary) {
+      if (cur.hidden || cur.style.display === "none") return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+  function readActiveMarketList(panel) {
+    const itemSelection = panel.querySelector('[class*="MarketplacePanel_itemSelection"]');
+    if (!itemSelection) return [];
+    const container = findActiveMarketItemsContainer(itemSelection);
+    if (!container) return [];
+    const itemNodes = container.querySelectorAll('[class*="Item_itemContainer"]');
+    const rawHrids = [];
+    for (let i = 0; i < itemNodes.length; i++) {
+      const node = itemNodes[i];
+      if (node.closest("[data-mwi-lite]")) continue;
+      if (isHiddenWithin(node, container)) continue;
+      const hrid = extractItemHrid(node);
+      if (hrid) rawHrids.push(hrid);
+    }
+    return normalizeMarketList(rawHrids);
+  }
+  function findMarketplaceHost(panel) {
+    const fKey = Reflect.ownKeys(panel).find(
+      (k) => typeof k === "string" && (k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"))
+    );
+    let fiber = fKey ? panel[fKey] : null;
+    for (let depth = 0; fiber && depth < 64; depth++, fiber = fiber.return) {
+      const host = fiber.stateNode;
+      if (host && typeof host === "object" && typeof host.handleViewOrderBook === "function" && typeof host.handleViewItemSummary === "function") {
+        return host;
+      }
+    }
+    return null;
+  }
+  function createMarketListNavModule() {
+    let ctx = null;
+    let unregStyle = null;
+    let unregOrderBooks = null;
+    let capturedList = [];
+    let lastRenderSig = "";
+    let currentPrevTarget = null;
+    let currentNextTarget = null;
+    let pendingSyncTimer = null;
+    const canEnhance = (itemHrid) => {
+      const detail = ctx?.gameData.getClientData()?.itemDetailMap?.[itemHrid];
+      return Array.isArray(detail?.enhancementCosts) && detail.enhancementCosts.length > 0;
+    };
+    const clearPendingSync = () => {
+      if (pendingSyncTimer !== null) {
+        window.clearTimeout(pendingSyncTimer);
+        pendingSyncTimer = null;
+      }
+    };
+    const removeNavBar = () => {
+      document.getElementById(NAV_BAR_ID)?.remove();
+      currentPrevTarget = null;
+      currentNextTarget = null;
+      lastRenderSig = "";
+    };
+    const navigateToTarget = (target) => {
+      const panel = findVisibleMarketPanel();
+      const marketHost = panel ? findMarketplaceHost(panel) : null;
+      if (target.level === null) {
+        if (marketHost) {
+          marketHost.handleViewItemSummary(target.itemHrid);
+          return true;
+        }
+        const core2 = ctx?.gameData.getReactGameCore();
+        if (typeof core2?.handleGoToMarketplace === "function") {
+          core2.handleGoToMarketplace(target.itemHrid, 0);
+          return true;
+        }
+        return false;
+      }
+      if (marketHost) {
+        marketHost.handleViewOrderBook(target.itemHrid, target.level);
+        return true;
+      }
+      const core = ctx?.gameData.getReactGameCore();
+      if (typeof core?.handleGoToMarketplace === "function") {
+        core.handleGoToMarketplace(target.itemHrid, target.level);
+        return true;
+      }
+      return false;
+    };
+    const handleNavClick = (dir, btn) => {
+      const target = dir === "prev" ? currentPrevTarget : currentNextTarget;
+      if (!target || btn.disabled) return;
+      btn.disabled = true;
+      try {
+        if (navigateToTarget(target)) {
+          clearPendingSync();
+          pendingSyncTimer = window.setTimeout(() => {
+            pendingSyncTimer = null;
+            ctx?.domScheduler.scheduleRun(false);
+          }, 60);
+        }
+      } finally {
+        btn.disabled = (dir === "prev" ? currentPrevTarget : currentNextTarget) === null;
+      }
+    };
+    const formatTargetLabel = (target) => {
+      const name = ctx?.i18n.getItemName(target.itemHrid) || target.itemHrid.replace("/items/", "");
+      if (target.level === null) {
+        return `${name} · ${ctx?.i18n.t("全", "All") ?? "All"}`;
+      }
+      return canEnhance(target.itemHrid) ? `${name} +${target.level}` : name;
+    };
+    const createNavBar = () => {
+      const bar = document.createElement("div");
+      bar.id = NAV_BAR_ID;
+      bar.setAttribute("data-mwi-lite", "1");
+      bar.setAttribute("role", "group");
+      const prevBtn = document.createElement("button");
+      prevBtn.type = "button";
+      prevBtn.className = "mwi-lite-mln-btn";
+      prevBtn.dataset.dir = "prev";
+      prevBtn.textContent = "<";
+      prevBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        handleNavClick("prev", prevBtn);
+      });
+      const posEl = document.createElement("span");
+      posEl.className = "mwi-lite-mln-pos";
+      const nextBtn = document.createElement("button");
+      nextBtn.type = "button";
+      nextBtn.className = "mwi-lite-mln-btn";
+      nextBtn.dataset.dir = "next";
+      nextBtn.textContent = ">";
+      nextBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        handleNavClick("next", nextBtn);
+      });
+      bar.append(prevBtn, posEl, nextBtn);
+      return bar;
+    };
+    const syncDom = () => {
+      if (!ctx) return;
+      const panel = findVisibleMarketPanel();
+      if (!panel) {
+        removeNavBar();
+        return;
+      }
+      const itemSelection = panel.querySelector('[class*="MarketplacePanel_itemSelection"]');
+      if (itemSelection) {
+        const selectionVisible = !itemSelection.matches('[class*="MarketplacePanel_hidden"]') && isElementVisible(itemSelection);
+        const liveList = readActiveMarketList(panel);
+        if (selectionVisible || liveList.length > 0) {
+          capturedList = liveList;
+        }
+      }
+      const isSummaryView = isElementVisible(panel.querySelector('[class*="MarketplacePanel_itemSummaryTable"]'));
+      const isOrderBookView = isElementVisible(panel.querySelector('[class*="MarketplacePanel_orderBooksContainer"]'));
+      const curItem = findVisibleCurrentItem(panel);
+      if (!curItem || !isSummaryView && !isOrderBookView) {
+        removeNavBar();
+        return;
+      }
+      const currentLevel = isSummaryView ? null : curItem.level;
+      const navState = resolveMarketListNavState(capturedList, curItem.itemHrid, currentLevel, canEnhance);
+      if (!navState.visible) {
+        removeNavBar();
+        return;
+      }
+      const infoContainer = curItem.el.closest('[class*="MarketplacePanel_infoContainer"]');
+      const mountParent = infoContainer ?? curItem.el.parentElement;
+      if (!mountParent) {
+        removeNavBar();
+        return;
+      }
+      let navEl = document.getElementById(NAV_BAR_ID);
+      if (!navEl) {
+        navEl = createNavBar();
+      }
+      if (infoContainer) {
+        if (navEl.parentElement !== infoContainer) {
+          infoContainer.appendChild(navEl);
+        }
+      } else if (navEl.parentElement !== mountParent || curItem.el.nextElementSibling !== navEl) {
+        mountParent.insertBefore(navEl, curItem.el.nextElementSibling);
+      }
+      currentPrevTarget = navState.prev;
+      currentNextTarget = navState.next;
+      const prevKey = navState.prev ? `${navState.prev.itemHrid}:${navState.prev.level ?? "all"}` : "";
+      const nextKey = navState.next ? `${navState.next.itemHrid}:${navState.next.level ?? "all"}` : "";
+      const sig = `${navState.index}/${navState.total}|${prevKey}|${nextKey}|${ctx.i18n.getLang()}`;
+      if (sig === lastRenderSig) return;
+      lastRenderSig = sig;
+      const prevBtn = navEl.querySelector('button[data-dir="prev"]');
+      const nextBtn = navEl.querySelector('button[data-dir="next"]');
+      const posEl = navEl.querySelector(".mwi-lite-mln-pos");
+      if (posEl) {
+        posEl.textContent = `${navState.index + 1}/${navState.total}`;
+      }
+      if (prevBtn) {
+        prevBtn.disabled = navState.prev === null;
+        const prevTitle = navState.prev ? ctx.i18n.t(`上一项: ${formatTargetLabel(navState.prev)}`, `Prev: ${formatTargetLabel(navState.prev)}`) : ctx.i18n.t("已是列表第一项", "First item in list");
+        prevBtn.title = prevTitle;
+        prevBtn.setAttribute("aria-label", prevTitle);
+      }
+      if (nextBtn) {
+        nextBtn.disabled = navState.next === null;
+        const nextTitle = navState.next ? ctx.i18n.t(`下一项: ${formatTargetLabel(navState.next)}`, `Next: ${formatTargetLabel(navState.next)}`) : ctx.i18n.t("已是列表最后一项", "Last item in list");
+        nextBtn.title = nextTitle;
+        nextBtn.setAttribute("aria-label", nextTitle);
+      }
+    };
+    return {
+      id: MARKET_LIST_NAV_MODULE_ID,
+      nameZh: "市场列表快捷翻页 (< >)",
+      nameEn: "Market List Quick Nav (< >)",
+      descriptionZh: "在市场商品详情图标下方添加 < / > 按钮，按当前搜索或分类列表顺序同强化等级切换相邻物品（默认关闭）",
+      descriptionEn: "Adds < / > buttons beneath the marketplace item icon to step through the active search or category list at the same enhancement level (disabled by default)",
+      category: "market",
+      defaultEnabled: false,
+      routes: ["market"],
+      init(context) {
+        ctx = context;
+        unregStyle = ctx.addStyle(
+          MARKET_LIST_NAV_MODULE_ID,
+          `
+        [class*="MarketplacePanel_infoContainer"]:has(> #${NAV_BAR_ID}) [class*="MarketplacePanel_currentItem"] {
+          margin-bottom: 2px !important;
+        }
+        #${NAV_BAR_ID} {
+          grid-column: 2;
+          grid-row: 3;
+          justify-self: center;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          margin: 2px auto 4px;
+          z-index: 8;
+          white-space: nowrap;
+          font-family: var(--mwi-px-mono, monospace);
+          font-variant-numeric: tabular-nums;
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-btn {
+          width: 26px;
+          height: 20px;
+          min-width: 26px;
+          min-height: 20px;
+          padding: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--mwi-px-btn-bg, linear-gradient(180deg, #324a8f 0%, #22356b 100%));
+          border: 1px solid var(--mwi-px-border, #8eb1ff);
+          border-radius: 0;
+          box-shadow: var(--mwi-px-shadow-btn, 0 0 0 1px #080d1a);
+          color: #f8fafc;
+          font-family: var(--mwi-px-mono, monospace);
+          font-size: 12px;
+          font-weight: 800;
+          line-height: 1;
+          cursor: pointer;
+          box-sizing: border-box;
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-btn:hover:not(:disabled) {
+          background: var(--mwi-px-btn-hover, linear-gradient(180deg, #405eb3 0%, #2b4385 100%));
+          border-color: var(--mwi-px-border-bright, #d5e5ff);
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-btn:disabled {
+          opacity: 0.38;
+          cursor: not-allowed;
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-pos {
+          min-width: 34px;
+          padding: 0 3px;
+          text-align: center;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 18px;
+          color: var(--mwi-px-sub, #9dbbff);
+          font-variant-numeric: tabular-nums;
+          user-select: none;
+        }
+        `
+        );
+        unregOrderBooks = ctx.wsBus.on("market_item_order_books_updated", () => {
+          clearPendingSync();
+          pendingSyncTimer = window.setTimeout(() => {
+            pendingSyncTimer = null;
+            ctx?.domScheduler.scheduleRun(false);
+          }, 40);
+        });
+        return () => {
+          clearPendingSync();
+          unregOrderBooks?.();
+          unregOrderBooks = null;
+          unregStyle?.();
+          unregStyle = null;
+          removeNavBar();
+          capturedList = [];
+          ctx = null;
+        };
+      },
+      onDom() {
+        syncDom();
+      }
+    };
+  }
+
   // src/features/market/market-quick-ops.ts
   var QUICK_MARK = "data-mwi-lite-qops";
   var MARKET_TAX3 = 0.02;
@@ -21754,7 +22184,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
   var PIN_BTN_ID = "mwi-lite-market-pin-btn";
   var SETTINGS_POPOVER_ID = "mwi-lite-market-shortcuts-popover";
   var ENH_LEVELS = [0, 5, 7, 8, 10, 12];
-  var ITEM_HRID_RE = /^\/items\/[a-z0-9_]+$/;
+  var ITEM_HRID_RE2 = /^\/items\/[a-z0-9_]+$/;
   function itemKey(item) {
     return `${item.itemHrid}:${item.level === null ? "all" : item.level}`;
   }
@@ -21765,7 +22195,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     for (const entry of raw) {
       if (!entry || typeof entry !== "object") continue;
       const { itemHrid, level } = entry;
-      if (typeof itemHrid !== "string" || !ITEM_HRID_RE.test(itemHrid)) continue;
+      if (typeof itemHrid !== "string" || !ITEM_HRID_RE2.test(itemHrid)) continue;
       if (level === null) {
         if (!allowNullLevel) continue;
       } else if (typeof level !== "number" || !Number.isSafeInteger(level) || level < 0 || level > 20) {
@@ -21808,22 +22238,22 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     if (href && href.includes("#")) return href.split("#")[0];
     return "/static/media/items_sprite.9c39e2ec.svg";
   }
-  function isElementVisible(el) {
+  function isElementVisible2(el) {
     if (!el || !el.isConnected) return false;
     return el.offsetParent !== null;
   }
-  function findVisibleMarketPanel() {
+  function findVisibleMarketPanel2() {
     const panels = document.querySelectorAll('[class*="MarketplacePanel_marketplacePanel"]');
     for (let i = 0; i < panels.length; i++) {
-      if (isElementVisible(panels[i])) return panels[i];
+      if (isElementVisible2(panels[i])) return panels[i];
     }
     return null;
   }
-  function findVisibleCurrentItem(panel) {
+  function findVisibleCurrentItem2(panel) {
     const nodes = panel.querySelectorAll('[class*="MarketplacePanel_currentItem"]');
     for (let i = 0; i < nodes.length; i++) {
       const cur = nodes[i];
-      if (!isElementVisible(cur)) continue;
+      if (!isElementVisible2(cur)) continue;
       const useEl = cur.querySelector("use");
       const href = useEl?.getAttribute("href") || useEl?.href?.baseVal || "";
       const slug = href.split("#")[1] || "";
@@ -21874,7 +22304,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       return false;
     };
     const openItemAllLevels = (itemHrid) => {
-      const panel = findVisibleMarketPanel();
+      const panel = findVisibleMarketPanel2();
       if (!panel) return openItemAtLevel(itemHrid, 0);
       const fKey = Reflect.ownKeys(panel).find(
         (k) => typeof k === "string" && (k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"))
@@ -22065,7 +22495,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     };
     const syncDom = () => {
       if (!ctx) return;
-      const panel = findVisibleMarketPanel();
+      const panel = findVisibleMarketPanel2();
       if (!panel) {
         closeSettingsPopover(false);
         document.getElementById(BAR_ID)?.remove();
@@ -22074,9 +22504,9 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         lastRenderSig = "";
         return;
       }
-      const isSummaryView = isElementVisible(panel.querySelector('[class*="MarketplacePanel_itemSummaryTable"]'));
-      const isOrderBookView = isElementVisible(panel.querySelector('[class*="MarketplacePanel_orderBooksContainer"]'));
-      const curItem = findVisibleCurrentItem(panel);
+      const isSummaryView = isElementVisible2(panel.querySelector('[class*="MarketplacePanel_itemSummaryTable"]'));
+      const isOrderBookView = isElementVisible2(panel.querySelector('[class*="MarketplacePanel_orderBooksContainer"]'));
+      const curItem = findVisibleCurrentItem2(panel);
       const activeDesc = curItem && (isSummaryView || isOrderBookView) ? { itemHrid: curItem.itemHrid, level: isSummaryView ? null : curItem.level } : null;
       const activeKey = activeDesc ? itemKey(activeDesc) : null;
       if (popoverEl && activeKey && !lastRenderSig.endsWith(`|${activeKey}`)) {
@@ -22869,6 +23299,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
   // src/features/market/index.ts
   var marketModules = [
     createMarketShortcutsModule(),
+    createMarketListNavModule(),
     createMagicSortModule(),
     createVolumeDisplayModule(),
     createMarketQuickOpsModule(),
@@ -23768,7 +24199,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
     }
     return null;
   }
-  function isElementVisible2(el) {
+  function isElementVisible3(el) {
     for (let node = el; node; node = node.parentElement) {
       if (node.hidden) return false;
       const style = getComputedStyle(node);
@@ -23971,7 +24402,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
       }
       const marketPanels = Array.from(document.querySelectorAll('[class*="MarketplacePanel_marketListings"]'));
       const matchingMarket = marketPanels.some((panel) => {
-        if (!isElementVisible2(panel)) return false;
+        if (!isElementVisible3(panel)) return false;
         const comp = findMarketplaceComponent(panel);
         return comp?.state?.itemHrid === pendingPrefill?.itemHrid && Number(comp?.state?.enhancementLevel || 0) === 0;
       });
@@ -23985,7 +24416,7 @@ self["webpackChunkmwicombatsimulator"] = __webpack_chunk_array__;`;
         '[class*="MarketplacePanel_modalContent"] [class*="quantityInputs"] input'
       );
       for (const input of inputs) {
-        if (pendingPrefill.filledInputs.has(input) || input.disabled || input.readOnly || !isElementVisible2(input)) {
+        if (pendingPrefill.filledInputs.has(input) || input.disabled || input.readOnly || !isElementVisible3(input)) {
           continue;
         }
         const comp = findMarketplaceComponent(input);
