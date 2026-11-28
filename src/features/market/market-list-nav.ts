@@ -296,11 +296,8 @@ export function createMarketListNavModule(): FeatureModule {
       return;
     }
 
-    const infoContainer = curItem.el.closest<HTMLElement>('[class*="MarketplacePanel_infoContainer"]');
-    const mountParent = infoContainer ?? curItem.el.parentElement;
-    if (!mountParent) {
-      removeNavBar();
-      return;
+    if (!curItem.el.style.position) {
+      curItem.el.style.position = "relative";
     }
 
     let navEl = document.getElementById(NAV_BAR_ID) as HTMLDivElement | null;
@@ -308,12 +305,8 @@ export function createMarketListNavModule(): FeatureModule {
       navEl = createNavBar();
     }
 
-    if (infoContainer) {
-      if (navEl.parentElement !== infoContainer) {
-        infoContainer.appendChild(navEl);
-      }
-    } else if (navEl.parentElement !== mountParent || curItem.el.nextElementSibling !== navEl) {
-      mountParent.insertBefore(navEl, curItem.el.nextElementSibling);
+    if (navEl.parentElement !== curItem.el) {
+      curItem.el.appendChild(navEl);
     }
 
     currentPrevTarget = navState.prev;
@@ -356,9 +349,10 @@ export function createMarketListNavModule(): FeatureModule {
     id: MARKET_LIST_NAV_MODULE_ID,
     nameZh: "市场列表快捷翻页 (< >)",
     nameEn: "Market List Quick Nav (< >)",
-    descriptionZh: "在市场商品详情图标下方添加 < / > 按钮，按当前搜索或分类列表顺序同强化等级切换相邻物品（默认关闭）",
+    descriptionZh:
+      "在市场商品详情图标左右下侧添加 < / > 按钮并在图标左下角叠加进度，按当前搜索或分类列表顺序同强化等级切换相邻物品（默认关闭）",
     descriptionEn:
-      "Adds < / > buttons beneath the marketplace item icon to step through the active search or category list at the same enhancement level (disabled by default)",
+      "Adds < / > buttons on the lower sides of the marketplace item icon with a corner progress overlay to step through the active search or category list at the same enhancement level (disabled by default)",
     category: "market",
     defaultEnabled: false,
     routes: ["market"],
@@ -369,29 +363,23 @@ export function createMarketListNavModule(): FeatureModule {
       unregStyle = ctx.addStyle(
         MARKET_LIST_NAV_MODULE_ID,
         `
-        [class*="MarketplacePanel_infoContainer"]:has(> #${NAV_BAR_ID}) [class*="MarketplacePanel_currentItem"] {
-          margin-bottom: 2px !important;
-        }
         #${NAV_BAR_ID} {
-          grid-column: 2;
-          grid-row: 3;
-          justify-self: center;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 4px;
-          margin: 2px auto 4px;
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
           z-index: 8;
-          white-space: nowrap;
           font-family: var(--mwi-px-mono, monospace);
           font-variant-numeric: tabular-nums;
         }
         #${NAV_BAR_ID} .mwi-lite-mln-btn {
-          width: 26px;
-          height: 20px;
-          min-width: 26px;
-          min-height: 20px;
+          position: absolute;
+          bottom: 0;
+          width: 28px;
+          height: 28px;
+          min-width: 28px;
+          min-height: 28px;
           padding: 0;
+          pointer-events: auto;
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -401,11 +389,17 @@ export function createMarketListNavModule(): FeatureModule {
           box-shadow: var(--mwi-px-shadow-btn, 0 0 0 1px #080d1a);
           color: #f8fafc;
           font-family: var(--mwi-px-mono, monospace);
-          font-size: 12px;
+          font-size: 13px;
           font-weight: 800;
           line-height: 1;
           cursor: pointer;
           box-sizing: border-box;
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-btn[data-dir="prev"] {
+          right: calc(100% + 6px);
+        }
+        #${NAV_BAR_ID} .mwi-lite-mln-btn[data-dir="next"] {
+          left: calc(100% + 4px);
         }
         #${NAV_BAR_ID} .mwi-lite-mln-btn:hover:not(:disabled) {
           background: var(--mwi-px-btn-hover, linear-gradient(180deg, #405eb3 0%, #2b4385 100%));
@@ -416,15 +410,32 @@ export function createMarketListNavModule(): FeatureModule {
           cursor: not-allowed;
         }
         #${NAV_BAR_ID} .mwi-lite-mln-pos {
-          min-width: 34px;
+          position: absolute;
+          left: 1px;
+          bottom: 1px;
           padding: 0 3px;
-          text-align: center;
-          font-size: 11px;
-          font-weight: 700;
-          line-height: 18px;
-          color: var(--mwi-px-sub, #9dbbff);
-          font-variant-numeric: tabular-nums;
+          background: rgba(7, 11, 22, 0.84);
+          border: 1px solid rgba(142, 177, 255, 0.55);
+          border-radius: 0;
+          color: var(--mwi-px-border-bright, #d5e5ff);
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 13px;
+          letter-spacing: -0.2px;
+          text-shadow: 1px 1px 0 #070b16;
+          white-space: nowrap;
+          pointer-events: none;
           user-select: none;
+          z-index: 9;
+        }
+        @media (max-width: 760px) {
+          #${NAV_BAR_ID} .mwi-lite-mln-btn {
+            width: 22px;
+            height: 22px;
+            min-width: 22px;
+            min-height: 22px;
+            font-size: 11px;
+          }
         }
         `
       );
