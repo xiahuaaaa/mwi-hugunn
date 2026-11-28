@@ -6,6 +6,7 @@ import { createQuickInputsModule } from "./quick-inputs";
 import { createRequiredMaterialsModule } from "./required-materials";
 import { createSkillStockModule } from "./skill-stock";
 import { createTaskAutoMinusOneModule, createTaskBoardModule } from "./task-board";
+import { createTaskRerollLockModule } from "./task-reroll-lock";
 
 export const plannerModules: FeatureModule[] = [
   createActionTimerModule(),
@@ -16,4 +17,5 @@ export const plannerModules: FeatureModule[] = [
   createSkillStockModule(),
   createTaskBoardModule(),
   createTaskAutoMinusOneModule(),
+  createTaskRerollLockModule(),
 ];
